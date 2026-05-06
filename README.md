@@ -1,4 +1,4 @@
-# @bitcraft/pi-web-tools
+# @bitcraft-apps/pi-web-tools
 
 Shell-only web search and fetch tools for [pi.dev](https://pi.dev). **Zero API keys, zero accounts** — just `ddgr` + `pandoc`/`w3m` running locally.
 
@@ -65,6 +65,8 @@ bun run test:network        # integration tests (requires net)
 We use **bun** as the dev package manager. The committed lockfile is `bun.lock`; `package-lock.json` is gitignored.
 
 > Caveat for end-user installs: `pi install git:...` runs `npm install` under the hood, which ignores `bun.lock` and re-resolves transitive deps against the registry. End-user installs are therefore not byte-reproducible until we publish to npm in v0.2 (#5). Acceptable for now: peer deps are wildcard-pinned and we have no runtime deps that drift in breaking ways.
+
+> Note on npm scope: the GitHub org is `bitcraft-apps` because `bitcraft` was taken on GitHub. The npm scope `@bitcraft` is also taken, so the npm package is published as `@bitcraft-apps/pi-web-tools` to mirror the GH org (#5).
 
 Hot-reload during dev:
 

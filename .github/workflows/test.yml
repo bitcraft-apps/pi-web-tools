@@ -1,0 +1,24 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: vitest (bun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run test
+        env:
+          # Network tests hit live DDG and are flaky / rate-limited. Keep manual.
+          RUN_NETWORK_TESTS: ""

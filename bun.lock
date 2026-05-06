@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@bitcraft/pi-web-tools",
+      "name": "@bitcraft-apps/pi-web-tools",
       "devDependencies": {
         "@mariozechner/pi-ai": "*",
         "@mariozechner/pi-coding-agent": "*",

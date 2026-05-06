@@ -2,3 +2,9 @@ node_modules/
 .pi/
 .DS_Store
 *.log
+
+# Belt-and-braces: this repo is bun-only (see README § Development).
+# Prevent accidental re-introduction by anyone running `npm install`.
+package-lock.json
+yarn.lock
+pnpm-lock.yaml

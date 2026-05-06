@@ -51,7 +51,10 @@ You don't call them directly — pi's agent calls them when it needs.
 ## Development
 
 ```bash
-brew install bun            # one-time, if you don't have it
+# one-time, if you don't have bun:
+#   macOS:        brew install bun
+#   Linux / WSL:  curl -fsSL https://bun.sh/install | bash
+# (or see https://bun.sh for other options)
 git clone https://github.com/bitcraft-apps/pi-web-tools
 cd pi-web-tools
 bun install
@@ -59,7 +62,7 @@ bun run test                # unit tests, no network
 bun run test:network        # integration tests (requires net)
 ```
 
-**Lockfile:** this repo uses `bun.lock` only — no `package-lock.json`. `pi install git:...` runs `npm install` under the hood and resolves transitive deps fresh; that's acceptable since our peer deps are already wildcard-pinned and the install path will move to npm in v0.2 (#5).
+**Lockfile:** this repo uses `bun.lock` only — no `package-lock.json`. `pi install git:...` runs `npm install` under the hood and resolves transitive deps fresh against the registry, so **end-user installs are not byte-reproducible** until we publish to npm in v0.2 (#5). This is acceptable for now because our peer deps are wildcard-pinned and we have no runtime deps that drift in breaking ways.
 
 Hot-reload during dev:
 

@@ -9,6 +9,8 @@ import {
   MAX_RESPONSE_BYTES,
   OPENCODE_UA,
 } from "./lib/headers.js";
+import { Type } from "@mariozechner/pi-ai";
+import { defineTool } from "@mariozechner/pi-coding-agent";
 
 export interface FetchInput {
   url: string;
@@ -109,3 +111,26 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   const md = await htmlToMarkdown(body);
   return truncate(md, maxChars);
 }
+
+export const webfetchTool = defineTool({
+  name: "webfetch",
+  label: "Web Fetch",
+  description:
+    "Fetch a URL and return its main text content as markdown. HTML is converted via pandoc or w3m. Use after `websearch` to read full content of a result, or directly when user gives you a URL. Cannot fetch binary content (PDF, images). Cannot reach localhost or RFC1918 link-local addresses.",
+  parameters: Type.Object({
+    url: Type.String({ description: "Absolute http(s) URL to fetch." }),
+    max_chars: Type.Optional(
+      Type.Number({
+        description: `Truncate output at N chars (default ${MAX_CHARS_DEFAULT}, hard cap ${MAX_CHARS_HARD_CAP}).`,
+        default: MAX_CHARS_DEFAULT,
+      }),
+    ),
+  }),
+  async execute(_id, params, _signal, _onUpdate, _ctx) {
+    const md = await fetchAsMarkdown({ url: params.url, max_chars: params.max_chars });
+    return {
+      content: [{ type: "text", text: md }],
+      details: { url: params.url, chars: md.length },
+    };
+  },
+});

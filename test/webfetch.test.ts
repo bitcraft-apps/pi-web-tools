@@ -125,3 +125,29 @@ describe("Cloudflare retry hack", () => {
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/JS|cannot fetch/i);
   });
 });
+
+import { webfetchTool } from "../src/webfetch.js";
+
+describe("webfetchTool", () => {
+  it("has correct shape", () => {
+    expect(webfetchTool.name).toBe("webfetch");
+    expect(webfetchTool.description).toMatch(/markdown/i);
+    expect(typeof webfetchTool.execute).toBe("function");
+  });
+
+  it("returns text content from fetchAsMarkdown", async () => {
+    mockFetchOnce({ body: "<h1>Hi</h1>" });
+    const result = await webfetchTool.execute(
+      "tc",
+      { url: "https://example.com" },
+      new AbortController().signal,
+      () => {},
+      {} as any,
+    );
+    expect(result.content[0].type).toBe("text");
+    const textContent = result.content[0];
+    if (textContent.type === "text") {
+      expect(textContent.text).toContain("MD:");
+    }
+  });
+});

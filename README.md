@@ -1,4 +1,4 @@
-# @bitcraft-apps/pi-web-tools
+# @bitcraft/pi-web-tools
 
 Shell-only web search and fetch tools for [pi.dev](https://pi.dev). **Zero API keys, zero accounts** — just `ddgr` + `pandoc`/`w3m` running locally.
 

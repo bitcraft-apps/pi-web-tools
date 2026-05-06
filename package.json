@@ -1,5 +1,5 @@
 {
-  "name": "@bitcraft-apps/pi-web-tools",
+  "name": "@bitcraft/pi-web-tools",
   "version": "0.1.0",
   "description": "Shell-only web search and fetch tools for pi.dev. No API keys.",
   "type": "module",

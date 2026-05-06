@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { parseOutput, runDdgr, type DdgrResult } from "../src/lib/ddgr.js";
+import { parseOutput } from "../src/lib/ddgr.js";
 
 describe("parseOutput", () => {
   it("parses ddgr JSON array into results", () => {

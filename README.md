@@ -38,7 +38,7 @@ You don't call them directly — pi's agent calls them when it needs.
 
 - `websearch`: default 8 results, hard cap 25. DuckDuckGo rate-limits ~10 req/min/IP. If you hit it, wait or use `webfetch` directly.
 - `webfetch`: default 50k chars output, hard cap 200k. 5 MB response cap. 30s timeout. **Cannot fetch:** PDFs, images, video, audio, localhost, 127/8, 169.254/16. **Cannot render:** JS-heavy SPAs (you'll get an empty markdown).
-- Non-Latin charsets may render as replacement characters; UTF-8 and Latin-1/Windows-1252 work correctly. Custom `TextDecoder` for `windows-1250` etc. is planned for v0.2.
+- Honors the `charset=` parameter on `Content-Type` for response decoding (e.g. `windows-1250`, `iso-8859-2`, `shift_jis`, `gb2312`). Unknown labels fall back to UTF-8.
 - All operations are read-only and synchronous. No persistent state, no cache.
 
 ## Troubleshooting

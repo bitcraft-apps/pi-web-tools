@@ -7,6 +7,7 @@ import {
   MAX_CHARS_DEFAULT,
   MAX_CHARS_HARD_CAP,
   MAX_RESPONSE_BYTES,
+  OPENCODE_UA,
 } from "./lib/headers.js";
 
 export interface FetchInput {
@@ -40,6 +41,22 @@ function truncate(text: string, max: number): string {
   );
 }
 
+async function doFetch(url: URL, userAgent: string): Promise<Response> {
+  return fetch(url, {
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    redirect: "follow",
+    headers: { "User-Agent": userAgent, Accept: ACCEPT_HEADER },
+  });
+}
+
+async function isCloudflareChallenge(response: Response): Promise<boolean> {
+  if (response.headers.get("cf-mitigated") === "challenge") return true;
+  if (response.status !== 403) return false;
+  const clone = response.clone();
+  const body = await clone.text();
+  return /just a moment|cf-chl-bypass/i.test(body);
+}
+
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   const url = validateUrl(input.url);
   const maxChars = Math.min(
@@ -47,11 +64,14 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     MAX_CHARS_HARD_CAP,
   );
 
-  const response = await fetch(url, {
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    redirect: "follow",
-    headers: { "User-Agent": BROWSER_UA, Accept: ACCEPT_HEADER },
-  });
+  let response = await doFetch(url, BROWSER_UA);
+
+  if (await isCloudflareChallenge(response)) {
+    response = await doFetch(url, OPENCODE_UA);
+    if (await isCloudflareChallenge(response)) {
+      throw new Error("Site requires JS, cannot fetch in shell-only mode (Cloudflare challenge)");
+    }
+  }
 
   if (response.status >= 400) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);

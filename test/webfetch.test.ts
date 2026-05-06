@@ -87,3 +87,41 @@ describe("fetchAsMarkdown", () => {
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/too large/i);
   });
 });
+
+describe("Cloudflare retry hack", () => {
+  it("retries with UA=opencode on cf-mitigated header", async () => {
+    const cfHeaders = new Headers({ "content-type": "text/html", "cf-mitigated": "challenge" });
+    const okHeaders = new Headers({ "content-type": "text/html" });
+
+    const mock = vi.fn()
+      .mockResolvedValueOnce(new Response("<html>blocked</html>", { status: 200, headers: cfHeaders }))
+      .mockResolvedValueOnce(new Response("<h1>OK</h1>", { status: 200, headers: okHeaders }));
+    global.fetch = mock as any;
+
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(mock).toHaveBeenCalledTimes(2);
+    const secondCall = mock.mock.calls[1][1];
+    expect(secondCall.headers["User-Agent"]).toBe("opencode");
+    expect(md).toContain("MD:");
+  });
+
+  it("retries with UA=opencode on 403 + 'Just a moment' body", async () => {
+    const headers = new Headers({ "content-type": "text/html" });
+    const mock = vi.fn()
+      .mockResolvedValueOnce(new Response("<html>Just a moment...</html>", { status: 403, headers }))
+      .mockResolvedValueOnce(new Response("<h1>OK</h1>", { status: 200, headers }));
+    global.fetch = mock as any;
+
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws if challenge persists after retry", async () => {
+    const cfHeaders = new Headers({ "content-type": "text/html", "cf-mitigated": "challenge" });
+    const mock = vi.fn()
+      .mockResolvedValue(new Response("<html>blocked</html>", { status: 200, headers: cfHeaders }));
+    global.fetch = mock as any;
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/JS|cannot fetch/i);
+  });
+});

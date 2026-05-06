@@ -62,7 +62,9 @@ bun run test                # unit tests, no network
 bun run test:network        # integration tests (requires net)
 ```
 
-**Lockfile:** this repo uses `bun.lock` only — no `package-lock.json`. `pi install git:...` runs `npm install` under the hood and resolves transitive deps fresh against the registry, so **end-user installs are not byte-reproducible** until we publish to npm in v0.2 (#5). This is acceptable for now because our peer deps are wildcard-pinned and we have no runtime deps that drift in breaking ways.
+We use **bun** as the dev package manager. The committed lockfile is `bun.lock`; `package-lock.json` is gitignored.
+
+> Caveat for end-user installs: `pi install git:...` runs `npm install` under the hood, which ignores `bun.lock` and re-resolves transitive deps against the registry. End-user installs are therefore not byte-reproducible until we publish to npm in v0.2 (#5). Acceptable for now: peer deps are wildcard-pinned and we have no runtime deps that drift in breaking ways.
 
 Hot-reload during dev:
 

@@ -112,7 +112,7 @@ describe("Cloudflare retry hack", () => {
       .mockResolvedValueOnce(new Response("<h1>OK</h1>", { status: 200, headers }));
     global.fetch = mock as any;
 
-    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(2);
   });
 

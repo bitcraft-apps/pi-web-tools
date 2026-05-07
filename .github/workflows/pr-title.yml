@@ -31,7 +31,6 @@ jobs:
             feat
             fix
             perf
-            deps
             revert
             docs
             style
@@ -40,8 +39,9 @@ jobs:
             test
             build
             ci
-          requireScope: false
-          subjectPattern: ^(?![A-Z]).+$
+          subjectPattern: ^(?![A-Z])\S.{2,}[^.]$
           subjectPatternError: |
-            The subject "{subject}" found in the PR title "{title}"
-            should start with a lowercase character.
+            The subject "{subject}" in PR title "{title}" must:
+            - start with a lowercase, non-whitespace character
+            - be at least 4 characters long (no empty subject after `:`)
+            - not end with a period.

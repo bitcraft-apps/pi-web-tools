@@ -5,6 +5,7 @@ vi.mock("../src/lib/html2md.js", () => ({
 }));
 
 import { fetchAsMarkdown } from "../src/webfetch.js";
+import { htmlToMarkdown } from "../src/lib/html2md.js";
 
 function mockFetchOnce(opts: {
   status?: number;
@@ -140,6 +141,137 @@ describe("charset decoding", () => {
     });
     const out = await fetchAsMarkdown({ url: "https://example.com/x.txt" });
     expect(out).toBe("plain ąćę utf8");
+  });
+});
+
+describe("HTML meta charset sniffing", () => {
+  // "Łódź" in windows-1250
+  const POLISH_WIN1250 = new Uint8Array([0xA3, 0xF3, 0x64, 0x9F]);
+
+  function buildHtml(metaTag: string): Uint8Array {
+    const head = `<!doctype html><html><head>${metaTag}</head><body>`;
+    const tail = `</body></html>`;
+    const headBytes = new TextEncoder().encode(head);
+    const tailBytes = new TextEncoder().encode(tail);
+    const out = new Uint8Array(headBytes.length + POLISH_WIN1250.length + tailBytes.length);
+    out.set(headBytes, 0);
+    out.set(POLISH_WIN1250, headBytes.length);
+    out.set(tailBytes, headBytes.length + POLISH_WIN1250.length);
+    return out;
+  }
+
+  const htmlWithMetaCharset = (charset: string) =>
+    buildHtml(`<meta charset="${charset}">`);
+  const htmlWithMetaHttpEquiv = (charset: string) =>
+    buildHtml(`<meta http-equiv="Content-Type" content="text/html; charset=${charset}">`);
+
+  function lastHtmlPassedToMd(): string {
+    const mock = vi.mocked(htmlToMarkdown);
+    const calls = mock.mock.calls;
+    return calls[calls.length - 1]?.[0] as string;
+  }
+
+  it("honors <meta charset> when HTTP content-type omits charset", async () => {
+    mockFetchOnce({
+      body: htmlWithMetaCharset("windows-1250"),
+      headers: { "content-type": "text/html" },
+    });
+    await fetchAsMarkdown({ url: "https://example.pl" });
+    expect(lastHtmlPassedToMd()).toContain("Łódź");
+  });
+
+  it("honors <meta http-equiv=Content-Type> when HTTP content-type omits charset", async () => {
+    mockFetchOnce({
+      body: htmlWithMetaHttpEquiv("windows-1250"),
+      headers: { "content-type": "text/html" },
+    });
+    await fetchAsMarkdown({ url: "https://example.pl" });
+    expect(lastHtmlPassedToMd()).toContain("Łódź");
+  });
+
+  it("is case-insensitive in meta charset", async () => {
+    mockFetchOnce({
+      body: htmlWithMetaCharset("WINDOWS-1250"),
+      headers: { "content-type": "text/html" },
+    });
+    await fetchAsMarkdown({ url: "https://example.pl" });
+    expect(lastHtmlPassedToMd()).toContain("Łódź");
+  });
+
+  it("HTTP charset takes precedence over meta charset", async () => {
+    // body declares utf-8 in meta but HTTP says windows-1250 → HTTP wins.
+    // The meta tag itself is ASCII so decodes identically; the Polish bytes
+    // (A3 F3 64 9F) only resolve to Łódź under windows-1250.
+    mockFetchOnce({
+      body: htmlWithMetaCharset("utf-8"),
+      headers: { "content-type": "text/html; charset=windows-1250" },
+    });
+    await fetchAsMarkdown({ url: "https://example.pl" });
+    expect(lastHtmlPassedToMd()).toContain("Łódź");
+  });
+
+  it("falls back to utf-8 when meta charset is unknown", async () => {
+    const utf8 = new TextEncoder().encode(
+      `<!doctype html><html><head><meta charset="x-bogus"></head><body>świat</body></html>`,
+    );
+    mockFetchOnce({ body: utf8, headers: { "content-type": "text/html" } });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(lastHtmlPassedToMd()).toContain("świat");
+  });
+
+  it("ignores meta charset declared past the first 1024 bytes", async () => {
+    // Construct a body where the meta declaration sits past the 1024-byte sniff window
+    // and the Polish bytes are windows-1250-only (0xA3, 0x9F are invalid as standalone
+    // utf-8 lead bytes → yield U+FFFD on utf-8 fallback). If sniffing honored the
+    // out-of-window meta we'd see "Łódź"; we want to prove we get mojibake instead.
+    const padding = " ".repeat(2000);
+    const head = new TextEncoder().encode(
+      `<!doctype html><html><head>${padding}<meta charset="windows-1250"></head><body>`,
+    );
+    const tail = new TextEncoder().encode(`</body></html>`);
+    const body = new Uint8Array(head.length + POLISH_WIN1250.length + tail.length);
+    body.set(head, 0);
+    body.set(POLISH_WIN1250, head.length);
+    body.set(tail, head.length + POLISH_WIN1250.length);
+
+    mockFetchOnce({ body, headers: { "content-type": "text/html" } });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    const out = lastHtmlPassedToMd();
+    expect(out).not.toContain("Łódź");
+    expect(out).toContain("\uFFFD"); // utf-8 replacement char proves fallback fired
+  });
+
+  it("ignores meta charset inside HTML comments", async () => {
+    // The only meta in the sniff window is commented out; sniffer must skip it
+    // and we must fall back to utf-8.
+    const utf8 = new TextEncoder().encode(
+      `<!doctype html><html><head><!-- <meta charset="windows-1250"> --></head><body>świat</body></html>`,
+    );
+    mockFetchOnce({ body: utf8, headers: { "content-type": "text/html" } });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(lastHtmlPassedToMd()).toContain("świat");
+  });
+
+  it("ignores unterminated HTML comments in the sniff window", async () => {
+    // Comment is opened but never closed before EOF of the sniff window;
+    // a commented-out meta past the opener must not be honored.
+    const utf8 = new TextEncoder().encode(
+      `<!doctype html><html><head><!-- <meta charset="windows-1250"></head><body>świat</body></html>`,
+    );
+    mockFetchOnce({ body: utf8, headers: { "content-type": "text/html" } });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(lastHtmlPassedToMd()).toContain("świat");
+  });
+
+  it("does not match charset= appearing in unrelated meta attributes", async () => {
+    // <meta name="description" content="...charset=windows-1250..."> must NOT trigger
+    // the sniffer; body is utf-8 and should round-trip without mojibake.
+    const utf8 = new TextEncoder().encode(
+      `<!doctype html><html><head><meta name="description" content="talks about charset=windows-1250 encoding"></head><body>świat</body></html>`,
+    );
+    mockFetchOnce({ body: utf8, headers: { "content-type": "text/html" } });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(lastHtmlPassedToMd()).toContain("świat");
   });
 });
 

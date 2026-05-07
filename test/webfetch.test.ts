@@ -13,6 +13,7 @@ vi.mock("../src/lib/extract.js", () => ({
 import { fetchAsMarkdown } from "../src/webfetch.js";
 import { htmlToMarkdown } from "../src/lib/html2md.js";
 import { extractContent } from "../src/lib/extract.js";
+import { MAX_RESPONSE_BYTES } from "../src/lib/headers.js";
 
 function mockFetchOnce(opts: {
   status?: number;
@@ -99,6 +100,79 @@ describe("fetchAsMarkdown", () => {
       headers: { "content-type": "text/html", "content-length": String(6 * 1024 * 1024) },
     });
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/too large/i);
+  });
+
+  // Issue #58: streaming-byte-cap. Content-Length is a fast-path; the real
+  // enforcement reads the stream and aborts at MAX_RESPONSE_BYTES.
+
+  // One shared oversize buffer (cap + 64 KB) for both rejection tests —
+  // avoids allocating multiple 6 MB Uint8Arrays per suite run. Stream
+  // factory slices windows out of it so each test gets an independent
+  // ReadableStream.
+  const OVERSIZE_BYTES = MAX_RESPONSE_BYTES + 64 * 1024;
+  const oversize = new Uint8Array(OVERSIZE_BYTES).fill(0x78); // 'x'
+  const makeOversizeStream = () =>
+    new ReadableStream({
+      start(controller) {
+        // Push in 256 KB chunks so the cap fires mid-stream rather than on
+        // the first read — exercises the per-chunk accumulator path.
+        const chunkSize = 256 * 1024;
+        for (let off = 0; off < OVERSIZE_BYTES; off += chunkSize) {
+          controller.enqueue(oversize.subarray(off, Math.min(off + chunkSize, OVERSIZE_BYTES)));
+        }
+        controller.close();
+      },
+    });
+
+  it("rejects response > 5MB when Content-Length is missing (chunked)", async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      new Response(makeOversizeStream(), {
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+      }),
+    ) as any;
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/too large/i);
+  });
+
+  it("rejects response > 5MB when Content-Length lies (says 1 KB, sends >5 MB)", async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      new Response(makeOversizeStream(), {
+        status: 200,
+        headers: new Headers({
+          "content-type": "text/html",
+          // Lying — says 1 KB.
+          "content-length": "1024",
+        }),
+      }),
+    ) as any;
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/too large/i);
+  });
+
+  it("accepts honest 4 MB response just under the cap", async () => {
+    const four = new Uint8Array(4 * 1024 * 1024).fill(0x78);
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(four);
+        controller.close();
+      },
+    });
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      new Response(stream, {
+        status: 200,
+        headers: new Headers({ "content-type": "text/plain" }),
+      }),
+    ) as any;
+
+    const out = await fetchAsMarkdown({ url: "https://example.com" });
+    // text/plain path: full 4 MB body streamed through, then truncated to
+    // max_chars (default 50_000) + a TRUNCATED footer. Asserting the exact
+    // truncated length proves the entire body was read — a partial read
+    // would either throw or produce a shorter string.
+    expect(out).toMatch(/TRUNCATED/);
+    expect(out.length).toBeGreaterThanOrEqual(50_000);
+    expect(out.length).toBeLessThanOrEqual(50_000 + 200); // body + footer
   });
 });
 

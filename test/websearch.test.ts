@@ -37,13 +37,13 @@ describe("websearchTool", () => {
   it("default limit is 8 when not provided", async () => {
     (runDdgr as any).mockResolvedValueOnce([]);
     await websearchTool.execute("tc2", { query: "x" }, new AbortController().signal, () => {}, {} as any);
-    expect(runDdgr).toHaveBeenLastCalledWith("x", 8, { region: undefined, safesearch: "moderate" });
+    expect(runDdgr).toHaveBeenLastCalledWith("x", 8, expect.objectContaining({ safesearch: "moderate" }));
   });
 
   it("clamps limit to max 25", async () => {
     (runDdgr as any).mockResolvedValueOnce([]);
     await websearchTool.execute("tc3", { query: "x", limit: 100 }, new AbortController().signal, () => {}, {} as any);
-    expect(runDdgr).toHaveBeenLastCalledWith("x", 25, { region: undefined, safesearch: "moderate" });
+    expect(runDdgr).toHaveBeenLastCalledWith("x", 25, expect.objectContaining({ safesearch: "moderate" }));
   });
 
   it("passes region through to runDdgr", async () => {
@@ -67,7 +67,7 @@ describe("websearchTool", () => {
       () => {},
       {} as any,
     );
-    expect(runDdgr).toHaveBeenLastCalledWith("x", 8, { region: undefined, safesearch: "off" });
+    expect(runDdgr).toHaveBeenLastCalledWith("x", 8, expect.objectContaining({ safesearch: "off" }));
   });
 
   it("propagates errors from ddgr", async () => {

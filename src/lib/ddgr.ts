@@ -35,8 +35,9 @@ export interface RunDdgrOptions {
 
 export function buildDdgrArgs(query: string, limit: number, opts: RunDdgrOptions = {}): string[] {
   const args = ["--json", "--num", String(limit), "--noprompt"];
-  if (opts.region) {
-    args.push("--reg", opts.region);
+  const region = opts.region?.trim();
+  if (region) {
+    args.push("--reg", region);
   }
   if (opts.safesearch === "off") {
     args.push("--unsafe");

@@ -1,6 +1,6 @@
 import { Type } from "@mariozechner/pi-ai";
 import { defineTool } from "@mariozechner/pi-coding-agent";
-import { runDdgr, type SafeSearch } from "./lib/ddgr.js";
+import { runDdgr } from "./lib/ddgr.js";
 
 const LIMIT_DEFAULT = 8;
 const LIMIT_MAX = 25;
@@ -22,7 +22,8 @@ export const websearchTool = defineTool({
     region: Type.Optional(
       Type.String({
         description:
-          "DuckDuckGo region code, e.g. 'pl-pl', 'us-en', 'de-de'. Default: ddgr's built-in (us-en).",
+          "DuckDuckGo region code, e.g. 'pl-pl', 'us-en', 'de-de'. Default: ddgr's built-in (us-en). Invalid codes silently fall back to ddgr's default.",
+        pattern: "^[a-z]{2}-[a-z]{2}$",
       }),
     ),
     safesearch: Type.Optional(
@@ -38,7 +39,7 @@ export const websearchTool = defineTool({
   }),
   async execute(_id, params, _signal, _onUpdate, _ctx) {
     const limit = Math.min(Math.max(1, params.limit ?? LIMIT_DEFAULT), LIMIT_MAX);
-    const safesearch = (params.safesearch ?? "moderate") as SafeSearch;
+    const safesearch = params.safesearch ?? "moderate";
     const results = await runDdgr(params.query, limit, {
       region: params.region,
       safesearch,

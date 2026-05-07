@@ -42,9 +42,22 @@ describe("parseOutput", () => {
 
 describe("buildDdgrArgs", () => {
   it("builds default args without region or unsafe", () => {
-    expect(buildDdgrArgs("hello", 8)).toEqual([
+    const args = buildDdgrArgs("hello", 8);
+    expect(args).toEqual([
       "--json", "--num", "8", "--noprompt", "--", "hello",
     ]);
+    expect(args).not.toContain("--reg");
+    expect(args).not.toContain("--unsafe");
+  });
+
+  it("omits --reg when region is empty or whitespace", () => {
+    expect(buildDdgrArgs("q", 8, { region: "" })).not.toContain("--reg");
+    expect(buildDdgrArgs("q", 8, { region: "   " })).not.toContain("--reg");
+  });
+
+  it("trims surrounding whitespace from region", () => {
+    const args = buildDdgrArgs("q", 8, { region: "  pl-pl  " });
+    expect(args[args.indexOf("--reg") + 1]).toBe("pl-pl");
   });
 
   it("includes --reg when region provided", () => {

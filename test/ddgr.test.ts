@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { parseOutput } from "../src/lib/ddgr.js";
+import { parseOutput, buildDdgrArgs } from "../src/lib/ddgr.js";
 
 describe("parseOutput", () => {
   it("parses ddgr JSON array into results", () => {
@@ -37,6 +37,33 @@ describe("parseOutput", () => {
 
   it("throws on invalid JSON", () => {
     expect(() => parseOutput("not json", 8)).toThrow(/parse/i);
+  });
+});
+
+describe("buildDdgrArgs", () => {
+  it("builds default args without region or unsafe", () => {
+    expect(buildDdgrArgs("hello", 8)).toEqual([
+      "--json", "--num", "8", "--noprompt", "--", "hello",
+    ]);
+  });
+
+  it("includes --reg when region provided", () => {
+    const args = buildDdgrArgs("hello", 5, { region: "pl-pl" });
+    expect(args).toContain("--reg");
+    expect(args[args.indexOf("--reg") + 1]).toBe("pl-pl");
+  });
+
+  it("adds --unsafe only when safesearch is off", () => {
+    expect(buildDdgrArgs("q", 8, { safesearch: "off" })).toContain("--unsafe");
+    expect(buildDdgrArgs("q", 8, { safesearch: "moderate" })).not.toContain("--unsafe");
+    expect(buildDdgrArgs("q", 8, { safesearch: "strict" })).not.toContain("--unsafe");
+    expect(buildDdgrArgs("q", 8)).not.toContain("--unsafe");
+  });
+
+  it("keeps query last after -- separator", () => {
+    const args = buildDdgrArgs("--evil", 8, { region: "us-en", safesearch: "off" });
+    expect(args[args.length - 2]).toBe("--");
+    expect(args[args.length - 1]).toBe("--evil");
   });
 });
 

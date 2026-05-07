@@ -26,13 +26,36 @@ export function parseOutput(stdout: string, limit: number): DdgrResult[] {
   }));
 }
 
-export async function runDdgr(query: string, limit: number): Promise<DdgrResult[]> {
+export type SafeSearch = "off" | "moderate" | "strict";
+
+export interface RunDdgrOptions {
+  region?: string;
+  safesearch?: SafeSearch;
+}
+
+export function buildDdgrArgs(query: string, limit: number, opts: RunDdgrOptions = {}): string[] {
+  const args = ["--json", "--num", String(limit), "--noprompt"];
+  if (opts.region) {
+    args.push("--reg", opts.region);
+  }
+  if (opts.safesearch === "off") {
+    args.push("--unsafe");
+  }
+  args.push("--", query);
+  return args;
+}
+
+export async function runDdgr(
+  query: string,
+  limit: number,
+  opts: RunDdgrOptions = {},
+): Promise<DdgrResult[]> {
   return new Promise((resolve, reject) => {
     let child;
     try {
       child = spawn(
         "ddgr",
-        ["--json", "--num", String(limit), "--noprompt", "--", query],
+        buildDdgrArgs(query, limit, opts),
         { stdio: ["ignore", "pipe", "pipe"] }
       );
     } catch (e: any) {

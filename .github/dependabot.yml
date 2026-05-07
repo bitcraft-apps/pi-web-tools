@@ -6,5 +6,8 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "ci"
-    labels:
-      - "chore"
+      include: "scope"
+    groups:
+      actions:
+        patterns:
+          - "*"

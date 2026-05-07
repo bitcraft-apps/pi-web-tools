@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/bitcraft-apps/pi-web-tools/compare/pi-web-tools-v0.2.0...pi-web-tools-v0.3.0) (2026-05-07)
+
+
+### Features
+
+* **webfetch:** honor HTML &lt;meta charset&gt; declarations ([#24](https://github.com/bitcraft-apps/pi-web-tools/issues/24)) ([d0003d2](https://github.com/bitcraft-apps/pi-web-tools/commit/d0003d2965900f9548dd44e07cb34960eb20f273))
+* **websearch:** expose region + safesearch params ([#27](https://github.com/bitcraft-apps/pi-web-tools/issues/27)) ([a17ab4d](https://github.com/bitcraft-apps/pi-web-tools/commit/a17ab4df8bcdda59f982931f03e7945c0cc9bbd1))
+
+
+### Performance Improvements
+
+* **webfetch:** memoize converter detection ([#26](https://github.com/bitcraft-apps/pi-web-tools/issues/26)) ([ae67089](https://github.com/bitcraft-apps/pi-web-tools/commit/ae6708926d50cedb70861701cd7c3c1a390e0656))
+
 ## [0.2.0](https://github.com/bitcraft-apps/pi-web-tools/compare/pi-web-tools-v0.1.1...pi-web-tools-v0.2.0) (2026-05-07)
 
 

@@ -11,6 +11,8 @@
 //   169.254.0.0/16    link-local (incl. AWS IMDS 169.254.169.254)
 //   100.64.0.0/10     CGNAT
 //   0.0.0.0/8         "this network" / route-of-last-resort (incl. bare 0)
+//   255.255.255.255   limited broadcast
+//   224.0.0.0/4       multicast
 //
 // Blocked v6 ranges:
 //   ::1/128           loopback
@@ -19,6 +21,8 @@
 //   fe80::/10         link-local
 //   ::ffff:0:0/96     IPv4-mapped — re-checked against v4 rules
 //   ::/96             IPv4-compatible (deprecated) — re-checked against v4 rules
+//   2002::/16         6to4 — embedded v4 (bytes 2..5) re-checked against v4 rules
+//   2001:0::/32       Teredo — embedded client v4 (bytes 12..15 XOR 0xff) re-checked
 //
 // IPv4 parsing follows the WHATWG URL "ipv4 parser" so non-canonical encodings
 // the URL parser accepts (decimal `2130706433`, octal `0177.0.0.1`, hex
@@ -26,7 +30,14 @@
 // the range check. A host that is not parseable as an IP is treated as a DNS
 // name and only the literal-string blocklist applies.
 
-const BLOCKED_HOSTNAMES = new Set(["localhost"]);
+const BLOCKED_HOSTNAMES = new Set([
+  "localhost",
+  // Common /etc/hosts loopback aliases that resolve to 127.0.0.1 / ::1 via DNS,
+  // bypassing the IP-literal checks below.
+  "localhost.localdomain",
+  "ip6-localhost",
+  "ip6-loopback",
+]);
 
 function stripBrackets(host: string): string {
   return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
@@ -34,6 +45,12 @@ function stripBrackets(host: string): string {
 
 // Parse one IPv4 part per WHATWG: 0x/0X → hex, leading 0 → octal, else decimal.
 // Returns null on any malformed input (caller treats whole host as non-IPv4).
+//
+// Note: WHATWG URL Standard (2023+) actually *fails* IPv4 parsing on a part
+// with a leading zero rather than interpreting it as octal. We deliberately
+// interpret it as octal here: failing would fall through to the DNS-name
+// branch and let `0177.0.0.1` slip past the SSRF guard. Interpreting (the
+// pre-2023 behaviour, also what curl/wget do) is the safer SSRF choice.
 function parseV4Part(part: string): number | null {
   if (part.length === 0) return null;
   let radix = 10;
@@ -155,6 +172,10 @@ function isBlockedV4(b: Uint8Array): boolean {
   if (b[0] === 100 && (b[1]! & 0xc0) === 64) return true;
   // 0.0.0.0/8 — incl. bare 0 / route-of-last-resort
   if (b[0] === 0) return true;
+  // 255.255.255.255 limited broadcast
+  if (b[0] === 255 && b[1] === 255 && b[2] === 255 && b[3] === 255) return true;
+  // 224.0.0.0/4 multicast
+  if ((b[0]! & 0xf0) === 0xe0) return true;
   return false;
 }
 
@@ -183,6 +204,19 @@ function isBlockedV6(b: Uint8Array): boolean {
   let v4compat = true;
   for (let i = 0; i < 12; i++) if (b[i] !== 0) { v4compat = false; break; }
   if (v4compat) return isBlockedV4(b.slice(12));
+
+  // 2002::/16 6to4 — embedded v4 in bytes 2..5. Routes via 6to4 relay to the
+  // embedded v4, so 2002:7f00:0001:: reaches 127.0.0.1.
+  if (b[0] === 0x20 && b[1] === 0x02) {
+    return isBlockedV4(b.slice(2, 6));
+  }
+
+  // 2001:0::/32 Teredo — client v4 in bytes 12..15, XOR'd with 0xff per RFC 4380.
+  if (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) {
+    const v4 = new Uint8Array(4);
+    for (let i = 0; i < 4; i++) v4[i] = b[12 + i]! ^ 0xff;
+    return isBlockedV4(v4);
+  }
 
   return false;
 }

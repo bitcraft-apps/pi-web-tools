@@ -35,17 +35,28 @@ jobs:
       contents: read
       id-token: write # required for npm provenance via OIDC
     steps:
-      - uses: actions/checkout@v4
+      # First-party actions SHA-pinned for the same reason as release-please-action above
+      # (cf. tj-actions/changed-files CVE-2025-30066 — first-party tags can be moved too).
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
+          node-version: '20.x'
           registry-url: 'https://registry.npmjs.org'
 
       # No build step (jiti loads raw .ts at consumer side) and no install needed
       # to publish — only devDependencies exist and they aren't part of the tarball.
-      - run: npm publish --access public --provenance
+      # Guard against re-runs on an already-published tag (npm would 403 otherwise).
+      - name: publish to npm (skip if version already exists)
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+            echo "${name}@${version} already published — skipping."
+          else
+            npm publish --access public --provenance
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

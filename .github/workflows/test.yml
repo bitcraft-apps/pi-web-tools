@@ -18,13 +18,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # SHA-pinned to match release-please.yml (cf. tj-actions/changed-files
-      # CVE-2025-30066 — first-party tags can be moved). v6 ships as a
-      # Node 24 action; this job otherwise runs bun, not Node.
+      # SHA-pinned to match release-please.yml. v6 ships as a Node 24
+      # action; this job otherwise runs bun, not Node.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      # SHA-pinned for the same reason as actions/checkout above
-      # (cf. tj-actions/changed-files CVE-2025-30066 — tags can be moved).
+      # SHA-pinned for the same reason as actions/checkout above.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           # Pin for reproducibility; bump manually or via Dependabot.

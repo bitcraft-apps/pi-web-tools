@@ -16,7 +16,14 @@ function fakeChild(stdoutText: string, exitCode = 0, stderrText = "") {
   ee.stderr = Readable.from([Buffer.from(stderrText, "utf-8")]);
   ee.stdin = new Writable({ write(_c, _e, cb) { cb(); } });
   ee.kill = () => {};
-  setImmediate(() => ee.emit("close", exitCode));
+  // Emit "close" *after* stdout drains, so the implementation's data handlers
+  // have populated stdoutChunks before close fires. Without this we relied on
+  // process.nextTick (Readable.from) beating setImmediate (close), which is
+  // an implementation detail of node's scheduling. resume() forces flow even
+  // when the consumer (e.g. commandExists) doesn't attach a data listener —
+  // mirrors real `spawn`, where the OS pipe closes regardless of consumption.
+  ee.stdout.on("end", () => ee.emit("close", exitCode));
+  setImmediate(() => ee.stdout.resume());
   return ee;
 }
 
@@ -27,7 +34,7 @@ function fakeChild(stdoutText: string, exitCode = 0, stderrText = "") {
  * stdin.on("error") handler in the implementation, this would crash the
  * process via unhandled "error" on a Writable.
  */
-function fakeChildClosedEarly(exitCode = 1) {
+function fakeChildEpipeOnStdin(exitCode = 1) {
   const ee: any = new EventEmitter();
   ee.stdout = Readable.from([Buffer.alloc(0)]);
   ee.stderr = Readable.from([Buffer.alloc(0)]);
@@ -172,7 +179,7 @@ describe("extractContent", () => {
   it("survives extractor that closes before stdin.end() (EPIPE on write)", async () => {
     (spawn as any).mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
-      if (cmd === "trafilatura") return fakeChildClosedEarly(2);
+      if (cmd === "trafilatura") return fakeChildEpipeOnStdin(2);
       return fakeChild("", 1);
     });
     // The implementation must attach stdin.on("error", ...) before .end(),

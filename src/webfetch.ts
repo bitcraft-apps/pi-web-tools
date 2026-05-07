@@ -189,21 +189,20 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // those cases we fall back to the full HTML so the tool still produces
   // output (the extractor is an optimization, not a contract).
   //
-  // Fallback heuristic: if the extractor returned suspiciously little (<1% of
-  // input) on a large page (>10 KB), assume it picked the wrong container
-  // (e.g. a footer / breadcrumb on a page with no <article>) and use the full
-  // HTML instead. The threshold catches modes 1 (empty) and 2 (trivial) of
-  // Readability false-negatives; it does not catch modes 3 (wrong-but-
-  // substantial output) or 4 (stripped tables/code outside the article
-  // container) — those are unfixable without semantic analysis.
-  // Skip the extractor subprocess entirely on small bodies: the ratio guard
-  // can't fire (gated on >10 KB), and on RSS items / API HTML / error pages
-  // the chrome-stripping win doesn't justify the spawn overhead.
+  // Skip the extractor on small bodies (RSS items, API HTML, error pages):
+  // the chrome-stripping win doesn't justify the spawn overhead. Then, if the
+  // extractor returned <1% of input, assume it picked the wrong container
+  // (e.g. a footer on a page with no <article>) and fall back to full HTML.
+  // Catches Readability false-negative modes 1 (empty) and 2 (trivial); does
+  // not catch modes 3 (wrong-but-substantial) or 4 (stripped tables/code) —
+  // unfixable without semantic analysis.
+  //
+  // body.length is JS string length (UTF-16 code units), not bytes. Both
+  // sides of the ratio compare in the same unit, so the guard itself is
+  // correct; the 10 KB threshold is fuzzy for non-ASCII pages but doesn't
+  // need to be tight. An extractor that returns literally "" passes the
+  // null-check and then 0 < 100, so it correctly falls back.
   const extracted = body.length < 10_000 ? null : await extractContent(body, input.url);
-  // Ratio guard: if the extractor returned <1% of input, assume it picked the
-  // wrong container and fall back to full HTML. The body.length>10_000 clause
-  // from the prior version was redundant — extraction is already gated on
-  // body.length>=10_000 above.
   const useExtracted = extracted !== null && extracted.length >= 0.01 * body.length;
   const md = await htmlToMarkdown(useExtracted ? extracted : body);
   return truncate(md, maxChars);

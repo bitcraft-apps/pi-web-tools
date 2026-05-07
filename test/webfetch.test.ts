@@ -135,6 +135,17 @@ describe("content extraction wire-in", () => {
     expect(htmlToMarkdown).toHaveBeenCalledWith(fullHtml);
   });
 
+  it("falls back to full HTML when extractor returns empty string on a large page", async () => {
+    // Empty-string output passes the `extracted !== null` guard; the ratio
+    // guard (0 >= 1% of 20 KB) is what saves us. Regression test for the
+    // "successful extractor returning literally '' triggers fallback" case.
+    const fullHtml = "<html>" + "x".repeat(20_000) + "</html>";
+    (extractContent as any).mockResolvedValueOnce("");
+    mockFetchOnce({ body: fullHtml });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(htmlToMarkdown).toHaveBeenCalledWith(fullHtml);
+  });
+
   it("short-circuits the extractor on small bodies (< 10 KB)", async () => {
     // Below the 10 KB threshold the ratio guard can't fire, so the spawn
     // overhead isn't worth it. extractContent must not be invoked at all;

@@ -26,8 +26,9 @@ async function commandExists(cmd: string): Promise<boolean> {
   return new Promise((resolve) => {
     let child;
     try {
-      // `which` isn't POSIX (`command -v` is), but this repo is Unix-only and
-      // `which` ships on every dev box we care about. If we ever add Windows
+      // `which` isn't POSIX (`command -v` is). May be missing on slim Alpine /
+      // distroless / busybox setups; in those cases this resolves false and we
+      // fall through to the no-extractor warning path. If we ever add Windows
       // support, this is the one place that breaks.
       child = spawn("which", [cmd], { stdio: ["ignore", "pipe", "pipe"] });
     } catch {
@@ -84,6 +85,10 @@ function runExtractor(cmd: string, args: string[], stdin: string): Promise<strin
       stdoutBytes += c.length;
       if (stdoutBytes > EXTRACT_MAX_BYTES) {
         overflowed = true;
+        // Drop already-buffered chunks immediately so a misbehaving extractor
+        // in a long-lived agent process doesn't keep ~50 MB live until the
+        // close handler runs and the Promise rejects.
+        stdoutChunks.length = 0;
         child.kill("SIGTERM");
         return;
       }
@@ -156,8 +161,11 @@ export async function extractContent(html: string, url: string): Promise<string 
     // rdrview: -H = output cleaned HTML, -u = base URL for relative-link resolution.
     // No positional path/url means "read HTML from stdin" per rdrview(1).
     // --disable-sandbox: macOS rdrview has no sandbox implemented; the flag is
-    // required there. On Linux/BSD the seccomp/Pledge/Capsicum sandbox is left
-    // enabled (we're feeding it HTML downloaded from arbitrary remote URLs).
+    // required there. Consequence: macOS users get an *unsandboxed* parse of
+    // attacker-controlled HTML. On Linux/BSD the seccomp/Pledge/Capsicum
+    // sandbox is left enabled. This asymmetry is the main reason trafilatura
+    // is probed first; revisit detection order if/when an rdrview brew formula
+    // (with a working macOS sandbox) lands.
     const args = ["-H", "-u", url];
     if (process.platform === "darwin") args.push("--disable-sandbox");
     return await runExtractor("rdrview", args, html);

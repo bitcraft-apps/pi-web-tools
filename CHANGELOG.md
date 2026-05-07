@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/bitcraft-apps/pi-web-tools/compare/v0.4.0...v0.4.1) (2026-05-07)
+
+
+### Bug Fixes
+
+* **security:** re-release pending fixes ([#60](https://github.com/bitcraft-apps/pi-web-tools/issues/60), [#61](https://github.com/bitcraft-apps/pi-web-tools/issues/61), [#62](https://github.com/bitcraft-apps/pi-web-tools/issues/62)) skipped by release-please ([#73](https://github.com/bitcraft-apps/pi-web-tools/issues/73)) ([a828e6c](https://github.com/bitcraft-apps/pi-web-tools/commit/a828e6cd2abdc37adb8d0757f175286be042a92f))
+* **webfetch:** cap Cloudflare challenge-detection body read to 4 KB ([#63](https://github.com/bitcraft-apps/pi-web-tools/issues/63)) ([2e6fa27](https://github.com/bitcraft-apps/pi-web-tools/commit/2e6fa2705456c23a223ffb6cf8dc4698ba97a9f5))
+
 ## [0.4.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v0.3.0...v0.4.0) (2026-05-07)
 
 

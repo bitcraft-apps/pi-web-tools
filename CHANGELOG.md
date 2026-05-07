@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v0.3.0...v0.4.0) (2026-05-07)
+
+
+### Features
+
+* **webfetch:** content-extraction pre-pass to strip page chrome ([#40](https://github.com/bitcraft-apps/pi-web-tools/issues/40)) ([aaca7b0](https://github.com/bitcraft-apps/pi-web-tools/commit/aaca7b087f9e86d9f2b6bca857c7b9a6e2d6a1c6))
+
 ## [0.3.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v0.2.0...v0.3.0) (2026-05-07)
 
 

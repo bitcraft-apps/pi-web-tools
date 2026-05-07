@@ -118,12 +118,46 @@ function truncate(text: string, max: number): string {
   );
 }
 
+const MAX_REDIRECTS = 5;
+
+// Single-hop fetch — does NOT follow redirects. Caller is responsible for
+// re-validating Location targets and looping. See fetchWithRedirects.
 async function doFetch(url: URL, userAgent: string): Promise<Response> {
   return fetch(url, {
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    redirect: "follow",
+    redirect: "manual",
     headers: { "User-Agent": userAgent, Accept: ACCEPT_HEADER },
   });
+}
+
+// Follow up to MAX_REDIRECTS hops, re-running validateUrl on each Location.
+// Without this, `redirect: "follow"` would silently bypass the SSRF guard:
+// a public host can 302 to http://10.0.0.1, http://169.254.169.254 (AWS IMDS),
+// http://localhost, etc., and the URL guard only saw the original input.
+//
+// webfetch is GET-only, so RFC 7231 method-downgrade rules (303 → GET; 307/308
+// preserve method+body) collapse to "always GET" — we just re-issue at the
+// new URL with the same UA. If this ever grows POST support, add downgrade
+// handling here.
+async function fetchWithRedirects(url: URL, userAgent: string): Promise<Response> {
+  let current = url;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const response = await doFetch(current, userAgent);
+    if (response.status < 300 || response.status >= 400) return response;
+    const location = response.headers.get("location");
+    if (!location) return response; // 3xx with no Location — let caller handle.
+    // Drain and discard the redirect body to free the connection.
+    try { await response.body?.cancel(); } catch { /* already closed */ }
+    let next: URL;
+    try {
+      next = new URL(location, current);
+    } catch {
+      throw new Error(`Invalid redirect Location: ${location}`);
+    }
+    // Re-run the full URL guard on every hop. Throws on blocked target.
+    current = validateUrl(next.toString());
+  }
+  throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
 }
 
 async function isCloudflareChallenge(response: Response): Promise<boolean> {
@@ -141,10 +175,10 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     MAX_CHARS_HARD_CAP,
   );
 
-  let response = await doFetch(url, BROWSER_UA);
+  let response = await fetchWithRedirects(url, BROWSER_UA);
 
   if (await isCloudflareChallenge(response)) {
-    response = await doFetch(url, OPENCODE_UA);
+    response = await fetchWithRedirects(url, OPENCODE_UA);
     if (await isCloudflareChallenge(response)) {
       throw new Error("Site requires JS, cannot fetch in shell-only mode (Cloudflare challenge)");
     }

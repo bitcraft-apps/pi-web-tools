@@ -403,6 +403,103 @@ describe("Cloudflare retry hack", () => {
 
 import { webfetchTool } from "../src/webfetch.js";
 
+describe("redirect re-validation (issue #57)", () => {
+  function redirectResponse(location: string, status = 302): Response {
+    return new Response("", { status, headers: new Headers({ location }) });
+  }
+
+  it("follows a redirect that stays on a public host", async () => {
+    const mock = vi.fn()
+      .mockResolvedValueOnce(redirectResponse("https://example.org/landing"))
+      .mockResolvedValueOnce(new Response("<h1>OK</h1>", {
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+      }));
+    global.fetch = mock as any;
+
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(mock).toHaveBeenCalledTimes(2);
+    expect(md).toContain("MD:");
+  });
+
+  it("throws when 302 points at loopback", async () => {
+    const mock = vi.fn()
+      .mockResolvedValueOnce(redirectResponse("http://127.0.0.1/admin"));
+    global.fetch = mock as any;
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws when 302 points at AWS IMDS (link-local)", async () => {
+    const mock = vi.fn()
+      .mockResolvedValueOnce(redirectResponse("http://169.254.169.254/latest/meta-data/"));
+    global.fetch = mock as any;
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
+  });
+
+  it("throws when 302 points at RFC1918 (depends on #56 expanded guard)", async () => {
+    // Skipped here because this branch is off main; #56 (the expanded
+    // blocklist) lives on a separate branch. Once both PRs land, the
+    // existing localhost/loopback/link-local cases plus the new RFC1918
+    // ranges all flow through the same revalidation path proven below.
+    // Kept as a placeholder so the case isn't forgotten on merge.
+  });
+
+  it("throws when 302 points at localhost by name", async () => {
+    const mock = vi.fn()
+      .mockResolvedValueOnce(redirectResponse("http://localhost:3000/admin"));
+    global.fetch = mock as any;
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
+  });
+
+  it("resolves relative Location against current URL", async () => {
+    // Relative redirect target that itself is a blocked alt-encoding would
+    // be impossible (always relative to https://example.com); this just
+    // proves relative paths flow through validateUrl correctly.
+    const mock = vi.fn()
+      .mockResolvedValueOnce(redirectResponse("/landing"))
+      .mockResolvedValueOnce(new Response("<h1>OK</h1>", {
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+      }));
+    global.fetch = mock as any;
+
+    await fetchAsMarkdown({ url: "https://example.com/page" });
+    expect(mock).toHaveBeenCalledTimes(2);
+    expect(mock.mock.calls[1][0].toString()).toBe("https://example.com/landing");
+  });
+
+  it("caps redirect chain at MAX_REDIRECTS", async () => {
+    const mock = vi.fn().mockImplementation(async (u: URL) => {
+      // Always redirect to a fresh public URL.
+      const next = `https://example${Math.random().toString(36).slice(2, 6)}.com/`;
+      return redirectResponse(next);
+    });
+    global.fetch = mock as any;
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/too many redirects/i);
+  });
+
+  it("returns a 3xx with no Location instead of looping", async () => {
+    // Synthesize a 3xx that allows a body (300/305 do; 304/204/205/301 do not
+    // per the Response constructor's spec checks). 305 is fine for our purpose:
+    // proves no Location → no loop, response handed back to caller.
+    const mock = vi.fn().mockResolvedValueOnce(
+      new Response("<h1>weird 3xx</h1>", {
+        status: 305,
+        headers: new Headers({ "content-type": "text/html" }),
+      }),
+    );
+    global.fetch = mock as any;
+
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("webfetchTool", () => {
   it("has correct shape", () => {
     expect(webfetchTool.name).toBe("webfetch");

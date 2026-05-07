@@ -11,6 +11,41 @@
 
 `<area>/<short-description>`, kebab-case. Examples: `websearch/region-filter`, `webfetch/textdecoder-windows-1250`, `chore/release-action`.
 
+## Commit / PR title format
+
+PRs are squash-merged. **The PR title is used verbatim as the squash commit subject**, so the PR title must itself be a valid [Conventional Commits](https://www.conventionalcommits.org/) subject. release-please reads these subjects to decide whether (and how) to cut the next release.
+
+### Allowed types
+
+Use only the types release-please recognizes. With this repo's default config (no `changelog-sections` override in `release-please-config.json`), the defaults apply:
+
+`feat`, `fix`, `perf`, `revert`, `docs`, `style`, `chore`, `refactor`, `test`, `build`, `ci`
+
+- `feat:` → minor bump, **Features** section
+- `fix:` → patch bump, **Bug Fixes** section
+- `perf:` → patch bump, **Performance Improvements** section
+- `revert:` → patch bump, **Reverts** section
+- `docs:`, `style:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:` → patch bump if they appear alone, but **hidden from CHANGELOG by default** (won't produce an entry)
+- `<type>!:` or a `BREAKING CHANGE:` footer → major bump
+
+Note: `deps` is **not** a default release-please type. Dependabot PRs in this repo use `ci(deps): …` (type `ci`, scope `deps`), which is hidden from the changelog.
+
+### Common mistake: unknown types produce no changelog entry and no version bump
+
+A subject like `security(webfetch): ...` looks conventional but `security` isn't a recognized type, so release-please neither bumps the version nor records a changelog entry — even for user-visible fixes. Use `fix:` with a `security` scope instead, so the change lands in **Bug Fixes** and triggers a patch:
+
+- ❌ `security(webfetch): re-validate URL on every redirect hop`
+- ✅ `fix(security): re-validate URL on every redirect hop in webfetch`
+
+(The trailing `(security)` annotation seen in some prior commits is a soft convention, not enforced by any lint or template.)
+
+### Examples from this repo
+
+- `feat(websearch): add region filter`
+- `fix(webfetch): handle windows-1250 via TextDecoder`
+- `ci(deps): bump googleapis/release-please-action from 4.4.1 to 5.0.0`
+- `docs(agents): require one-issue-one-PR and document granulation`
+
 ## Out of scope (deliberately rejected, do not propose)
 
 - **Build step.** Pi loads raw `.ts` via jiti — no Webpack, Rollup, tsc emit, etc.

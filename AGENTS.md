@@ -3,6 +3,9 @@
 ## PR policy
 
 - **Every PR must reference a pre-existing GitHub issue.** GitHub does not enforce this — open the issue first, link it from the PR.
+- **One PR = one issue.** If an issue can't be delivered in a single reviewable PR, split it into smaller issues first and open one PR per child issue. Don't bundle unrelated changes into a single PR just because they share a parent issue.
+  - Signs an issue needs granulating: it lists multiple independent measures ("do A, B, C") or touches unrelated areas.
+  - When granulating, open the child issues, link them from the parent, and convert the parent into a tracking issue (preserves context and links children).
 
 ## Branch naming
 

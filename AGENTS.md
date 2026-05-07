@@ -11,6 +11,35 @@
 
 `<area>/<short-description>`, kebab-case. Examples: `websearch/region-filter`, `webfetch/textdecoder-windows-1250`, `chore/release-action`.
 
+## Commit / PR title format
+
+PRs are squash-merged. **The PR title is used verbatim as the squash commit subject**, so the PR title must itself be a valid [Conventional Commits](https://www.conventionalcommits.org/) subject. release-please reads these subjects to decide whether (and how) to cut the next release.
+
+### Allowed types
+
+Use only the types release-please recognizes:
+
+`feat`, `fix`, `perf`, `deps`, `revert`, `docs`, `style`, `chore`, `refactor`, `test`, `build`, `ci`
+
+- `feat:` → minor bump
+- `fix:`, `perf:`, `deps:`, `revert:` → patch bump
+- `docs:`, `style:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:` → no release, but still appear in changelog sections
+- `<type>!:` or a `BREAKING CHANGE:` footer → major bump
+
+### Common mistake: non-listed types silently skip the release
+
+A subject like `security(webfetch): ...` looks conventional but is **not** in the list above, so release-please ignores it and no release is cut — even for user-visible fixes. Use `fix:` with a `security` scope or note instead:
+
+- ❌ `security(webfetch): re-validate URL on every redirect hop`
+- ✅ `fix(webfetch): re-validate URL on every redirect hop (security)`
+
+### Examples from this repo
+
+- `feat(websearch): add region filter`
+- `fix(webfetch): handle windows-1250 via TextDecoder`
+- `ci(deps): bump googleapis/release-please-action from 4.4.1 to 5.0.0`
+- `docs(agents): require one-issue-one-PR and document granulation`
+
 ## Out of scope (deliberately rejected, do not propose)
 
 - **Build step.** Pi loads raw `.ts` via jiti — no Webpack, Rollup, tsc emit, etc.

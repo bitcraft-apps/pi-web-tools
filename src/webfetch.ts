@@ -130,10 +130,18 @@ async function doFetch(url: URL, userAgent: string): Promise<Response> {
   });
 }
 
+function isRedirect(status: number): boolean {
+  return status >= 300 && status < 400;
+}
+
 // Follow up to MAX_REDIRECTS hops, re-running validateUrl on each Location.
 // Without this, `redirect: "follow"` would silently bypass the SSRF guard:
 // a public host can 302 to http://10.0.0.1, http://169.254.169.254 (AWS IMDS),
 // http://localhost, etc., and the URL guard only saw the original input.
+//
+// Cap of 5 is stricter than undici/Node fetch's default of 20 — webfetch is
+// for human-readable pages, not auth dances; chains longer than 5 are almost
+// always misconfigurations or loops.
 //
 // webfetch is GET-only, so RFC 7231 method-downgrade rules (303 → GET; 307/308
 // preserve method+body) collapse to "always GET" — we just re-issue at the
@@ -141,9 +149,9 @@ async function doFetch(url: URL, userAgent: string): Promise<Response> {
 // handling here.
 async function fetchWithRedirects(url: URL, userAgent: string): Promise<Response> {
   let current = url;
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+  for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
     const response = await doFetch(current, userAgent);
-    if (response.status < 300 || response.status >= 400) return response;
+    if (!isRedirect(response.status)) return response;
     const location = response.headers.get("location");
     if (!location) return response; // 3xx with no Location — let caller handle.
     // Drain and discard the redirect body to free the connection.
@@ -155,6 +163,9 @@ async function fetchWithRedirects(url: URL, userAgent: string): Promise<Response
       throw new Error(`Invalid redirect Location: ${location}`);
     }
     // Re-run the full URL guard on every hop. Throws on blocked target.
+    // Note: re-stringifies a URL we just parsed so validateUrl can re-parse it.
+    // Cheap today (pure parsing + regex, no DNS); revisit if validateUrl ever
+    // grows expensive checks.
     current = validateUrl(next.toString());
   }
   throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
@@ -175,6 +186,10 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     MAX_CHARS_HARD_CAP,
   );
 
+  // If the first attempt throws (e.g. SSRF guard tripped on a redirect),
+  // we deliberately do NOT fall through to the CF UA-swap retry — blocked
+  // is blocked, regardless of UA. The retry only fires when the first call
+  // returned a Response that looks like a CF challenge.
   let response = await fetchWithRedirects(url, BROWSER_UA);
 
   if (await isCloudflareChallenge(response)) {

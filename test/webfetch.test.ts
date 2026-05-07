@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../src/lib/html2md.js", () => ({
   htmlToMarkdown: vi.fn(async (html: string) => `MD:${html.slice(0, 20)}`),
@@ -404,6 +404,13 @@ describe("Cloudflare retry hack", () => {
 import { webfetchTool } from "../src/webfetch.js";
 
 describe("redirect re-validation (issue #57)", () => {
+  // Restore global.fetch after each test in this block so a test that throws
+  // mid-setup can't leak its mock into the next describe.
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
   function redirectResponse(location: string, status = 302): Response {
     return new Response("", { status, headers: new Headers({ location }) });
   }
@@ -439,13 +446,10 @@ describe("redirect re-validation (issue #57)", () => {
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
   });
 
-  it("throws when 302 points at RFC1918 (depends on #56 expanded guard)", async () => {
-    // Skipped here because this branch is off main; #56 (the expanded
-    // blocklist) lives on a separate branch. Once both PRs land, the
-    // existing localhost/loopback/link-local cases plus the new RFC1918
-    // ranges all flow through the same revalidation path proven below.
-    // Kept as a placeholder so the case isn't forgotten on merge.
-  });
+  // Pending until #56 lands (expanded RFC1918 blocklist). Once both PRs are
+  // merged, the existing localhost/loopback/link-local cases plus the new
+  // RFC1918 ranges all flow through the same revalidation path proven below.
+  it.todo("throws when 302 points at RFC1918 (depends on #56 expanded guard)");
 
   it("throws when 302 points at localhost by name", async () => {
     const mock = vi.fn()
@@ -473,10 +477,10 @@ describe("redirect re-validation (issue #57)", () => {
   });
 
   it("caps redirect chain at MAX_REDIRECTS", async () => {
-    const mock = vi.fn().mockImplementation(async (u: URL) => {
-      // Always redirect to a fresh public URL.
-      const next = `https://example${Math.random().toString(36).slice(2, 6)}.com/`;
-      return redirectResponse(next);
+    let i = 0;
+    const mock = vi.fn().mockImplementation(async () => {
+      // Deterministic counter — each hop redirects to a fresh public URL.
+      return redirectResponse(`https://example${i++}.com/`);
     });
     global.fetch = mock as any;
 

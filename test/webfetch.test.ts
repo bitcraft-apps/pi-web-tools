@@ -251,6 +251,28 @@ describe("HTML meta charset sniffing", () => {
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(lastHtmlPassedToMd()).toContain("świat");
   });
+
+  it("ignores unterminated HTML comments in the sniff window", async () => {
+    // Comment is opened but never closed before EOF of the sniff window;
+    // a commented-out meta past the opener must not be honored.
+    const utf8 = new TextEncoder().encode(
+      `<!doctype html><html><head><!-- <meta charset="windows-1250"></head><body>świat</body></html>`,
+    );
+    mockFetchOnce({ body: utf8, headers: { "content-type": "text/html" } });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(lastHtmlPassedToMd()).toContain("świat");
+  });
+
+  it("does not match charset= appearing in unrelated meta attributes", async () => {
+    // <meta name="description" content="...charset=windows-1250..."> must NOT trigger
+    // the sniffer; body is utf-8 and should round-trip without mojibake.
+    const utf8 = new TextEncoder().encode(
+      `<!doctype html><html><head><meta name="description" content="talks about charset=windows-1250 encoding"></head><body>świat</body></html>`,
+    );
+    mockFetchOnce({ body: utf8, headers: { "content-type": "text/html" } });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(lastHtmlPassedToMd()).toContain("świat");
+  });
 });
 
 describe("Cloudflare retry hack", () => {

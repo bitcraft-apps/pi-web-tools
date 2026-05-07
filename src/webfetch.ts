@@ -20,22 +20,44 @@ export interface FetchInput {
 const HTML_MIMES = ["text/html", "application/xhtml+xml"];
 const HTML_SNIFF_BYTES = 1024;
 
+type BodyKind = "html" | "json" | "text";
+
 function parseCharset(contentType: string): string | undefined {
   const m = /;\s*charset\s*=\s*"?([^";\s]+)"?/i.exec(contentType);
   return m?.[1];
 }
 
 // Sniff a <meta> charset declaration in the first HTML_SNIFF_BYTES of the body.
-// Catches both <meta charset="..."> and <meta http-equiv="Content-Type" content="...; charset=...">
-// (the http-equiv form contains charset=X in its content attr, so one regex matches both).
-// HTML comments are stripped first so a commented-out meta cannot win.
+// Catches both <meta charset="..."> and <meta http-equiv="Content-Type" content="...; charset=...">.
+// We tokenize each <meta> tag's attributes, so a charset= substring sitting inside an unrelated
+// quoted attribute value (e.g. <meta name="description" content="...charset=utf-8...">) cannot win.
+// HTML comments are stripped first; an unterminated <!-- inside the sniff window truncates the
+// buffer to be safe so a commented-out meta cannot leak through.
+// Note: this does not implement the WHATWG step "if meta says utf-16, force utf-8". HTTP charset
+// already takes precedence above, and a utf-16 meta in an ASCII-decoded sniff buffer is vanishingly
+// rare in practice; tryDecode falls back to utf-8 on a bogus label anyway.
 function sniffHtmlMetaCharset(buf: ArrayBuffer): string | undefined {
   const head = new Uint8Array(buf, 0, Math.min(HTML_SNIFF_BYTES, buf.byteLength));
-  // iso-8859-1 is a byte-preserving decode; meta declarations are pure ASCII.
-  const raw = new TextDecoder("iso-8859-1").decode(head);
-  const text = raw.replace(/<!--[\s\S]*?-->/g, "");
-  const m = /<meta\s[^>]*charset\s*=\s*["']?([A-Za-z0-9_:.\-+]+)/i.exec(text);
-  return m?.[1];
+  // windows-1252 is byte-preserving for ASCII and universally supported; meta declarations are pure ASCII.
+  const raw = new TextDecoder("windows-1252").decode(head);
+  let text = raw.replace(/<!--[\s\S]*?-->/g, "");
+  const unterminated = text.indexOf("<!--");
+  if (unterminated !== -1) text = text.slice(0, unterminated);
+
+  const metaRe = /<meta\b([^>]*)>/gi;
+  const attrRe = /([A-Za-z_:][A-Za-z0-9_.:-]*)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>`]+)))?/g;
+  for (let tag; (tag = metaRe.exec(text)) !== null; ) {
+    const attrs: Record<string, string> = {};
+    for (let a; (a = attrRe.exec(tag[1])) !== null; ) {
+      attrs[a[1].toLowerCase()] = a[2] ?? a[3] ?? a[4] ?? "";
+    }
+    if (attrs.charset) return attrs.charset;
+    if (attrs["http-equiv"]?.toLowerCase() === "content-type" && attrs.content) {
+      const inner = /charset\s*=\s*([A-Za-z0-9_:.\-+]+)/i.exec(attrs.content);
+      if (inner) return inner[1];
+    }
+  }
+  return undefined;
 }
 
 function tryDecode(buf: ArrayBuffer, charset: string): string | undefined {
@@ -49,7 +71,7 @@ function tryDecode(buf: ArrayBuffer, charset: string): string | undefined {
 function pickCharset(
   response: Response,
   buf: ArrayBuffer,
-  kind: "html" | "json" | "text",
+  kind: BodyKind,
 ): string | undefined {
   const httpCharset = parseCharset(response.headers.get("content-type") ?? "");
   if (httpCharset) return httpCharset;
@@ -59,7 +81,7 @@ function pickCharset(
 
 async function decodeBody(
   response: Response,
-  kind: "html" | "json" | "text",
+  kind: BodyKind,
 ): Promise<string> {
   const buf = await response.arrayBuffer();
   const charset = pickCharset(response, buf, kind);
@@ -71,7 +93,7 @@ async function decodeBody(
   return new TextDecoder("utf-8").decode(buf);
 }
 
-function classifyMime(ct: string): "html" | "json" | "text" | "binary" {
+function classifyMime(ct: string): BodyKind | "binary" {
   const lower = ct.toLowerCase();
   if (HTML_MIMES.some((m) => lower.startsWith(m))) return "html";
   if (lower.startsWith("application/json")) return "json";

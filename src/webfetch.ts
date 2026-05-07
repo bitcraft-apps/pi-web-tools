@@ -200,9 +200,11 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // can't fire (gated on >10 KB), and on RSS items / API HTML / error pages
   // the chrome-stripping win doesn't justify the spawn overhead.
   const extracted = body.length < 10_000 ? null : await extractContent(body, input.url);
-  const useExtracted =
-    extracted !== null &&
-    !(extracted.length < 0.01 * body.length && body.length > 10_000);
+  // Ratio guard: if the extractor returned <1% of input, assume it picked the
+  // wrong container and fall back to full HTML. The body.length>10_000 clause
+  // from the prior version was redundant — extraction is already gated on
+  // body.length>=10_000 above.
+  const useExtracted = extracted !== null && extracted.length >= 0.01 * body.length;
   const md = await htmlToMarkdown(useExtracted ? extracted : body);
   return truncate(md, maxChars);
 }

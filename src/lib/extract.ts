@@ -15,6 +15,9 @@ export type Extractor = "trafilatura" | "rdrview";
 // peak heap (input HTML is already in memory in the caller).
 const EXTRACT_MAX_BYTES = 50 * 1024 * 1024;
 
+// Cached for the life of the process. A `null` result (no extractor on $PATH)
+// also sticks: an extractor installed mid-process won't be picked up until
+// restart. Acceptable for an agent process; do not "fix" by re-probing.
 let cachedDetection: Promise<Extractor | null> | undefined;
 let warnedNoExtractor = false;
 let warnedExtractorFailure = false;
@@ -23,6 +26,9 @@ async function commandExists(cmd: string): Promise<boolean> {
   return new Promise((resolve) => {
     let child;
     try {
+      // `which` isn't POSIX (`command -v` is), but this repo is Unix-only and
+      // `which` ships on every dev box we care about. If we ever add Windows
+      // support, this is the one place that breaks.
       child = spawn("which", [cmd], { stdio: ["ignore", "pipe", "pipe"] });
     } catch {
       return resolve(false);
@@ -61,8 +67,11 @@ function runExtractor(cmd: string, args: string[], stdin: string): Promise<strin
     } catch (e) {
       return reject(e);
     }
-    const stdoutChunks: (Buffer | string)[] = [];
-    const stderrChunks: (Buffer | string)[] = [];
+    // Collect Buffers and decode once at close: per-chunk toString("utf-8")
+    // mojibakes when a multi-byte codepoint straddles a chunk boundary.
+    // No setEncoding() on stdout/stderr, so chunks are always Buffers.
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
     let overflowed = false;
     let timedOut = false;
@@ -71,8 +80,8 @@ function runExtractor(cmd: string, args: string[], stdin: string): Promise<strin
       child.kill("SIGTERM");
     }, EXTRACT_TIMEOUT_MS);
 
-    child.stdout.on("data", (c: Buffer | string) => {
-      stdoutBytes += Buffer.isBuffer(c) ? c.length : Buffer.byteLength(c, "utf-8");
+    child.stdout.on("data", (c: Buffer) => {
+      stdoutBytes += c.length;
       if (stdoutBytes > EXTRACT_MAX_BYTES) {
         overflowed = true;
         child.kill("SIGTERM");
@@ -80,17 +89,17 @@ function runExtractor(cmd: string, args: string[], stdin: string): Promise<strin
       }
       stdoutChunks.push(c);
     });
-    child.stderr.on("data", (c: Buffer | string) => stderrChunks.push(c));
+    child.stderr.on("data", (c: Buffer) => stderrChunks.push(c));
     child.on("error", (err) => { clearTimeout(timer); reject(err); });
     child.on("close", (code) => {
       clearTimeout(timer);
       if (overflowed) return reject(new Error(`${cmd} stdout exceeded ${EXTRACT_MAX_BYTES} bytes`));
       if (timedOut) return reject(new Error(`${cmd} timed out`));
       if (code !== 0) {
-        const stderr = stderrChunks.map((c) => (Buffer.isBuffer(c) ? c.toString("utf-8") : c)).join("");
+        const stderr = Buffer.concat(stderrChunks).toString("utf-8");
         return reject(new Error(`${cmd} exited with code ${code}: ${stderr}`));
       }
-      resolve(stdoutChunks.map((c) => (Buffer.isBuffer(c) ? c.toString("utf-8") : c)).join(""));
+      resolve(Buffer.concat(stdoutChunks).toString("utf-8"));
     });
 
     // Swallow EPIPE/ECONNRESET on stdin: extractor may exit before consuming

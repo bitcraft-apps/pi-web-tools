@@ -10,8 +10,10 @@ import { Readable, Writable } from "node:stream";
 
 function fakeChild(stdoutText: string, exitCode = 0, stderrText = "") {
   const ee: any = new EventEmitter();
-  ee.stdout = Readable.from([stdoutText]);
-  ee.stderr = Readable.from([stderrText]);
+  // Readable.from([string]) yields strings; the implementation now expects
+  // Buffers (matches real `spawn` behavior with no setEncoding call).
+  ee.stdout = Readable.from([Buffer.from(stdoutText, "utf-8")]);
+  ee.stderr = Readable.from([Buffer.from(stderrText, "utf-8")]);
   ee.stdin = new Writable({ write(_c, _e, cb) { cb(); } });
   ee.kill = () => {};
   setImmediate(() => ee.emit("close", exitCode));
@@ -27,8 +29,8 @@ function fakeChild(stdoutText: string, exitCode = 0, stderrText = "") {
  */
 function fakeChildClosedEarly(exitCode = 1) {
   const ee: any = new EventEmitter();
-  ee.stdout = Readable.from([""]);
-  ee.stderr = Readable.from([""]);
+  ee.stdout = Readable.from([Buffer.alloc(0)]);
+  ee.stderr = Readable.from([Buffer.alloc(0)]);
   ee.stdin = new Writable({
     write(_c, _e, cb) {
       const err: any = new Error("write EPIPE");
@@ -107,7 +109,7 @@ describe("detectExtractor", () => {
 });
 
 describe("extractContent", () => {
-  it("invokes trafilatura with --html --no-comments --precision and returns its stdout", async () => {
+  it("invokes trafilatura with --html --no-comments and returns its stdout", async () => {
     (spawn as any).mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
       if (cmd === "trafilatura") return fakeChild("<article>clean</article>", 0);

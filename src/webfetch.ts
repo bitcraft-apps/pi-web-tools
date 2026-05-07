@@ -18,25 +18,24 @@ export interface FetchInput {
 }
 
 const HTML_MIMES = ["text/html", "application/xhtml+xml"];
+const HTML_SNIFF_BYTES = 1024;
 
 function parseCharset(contentType: string): string | undefined {
   const m = /;\s*charset\s*=\s*"?([^";\s]+)"?/i.exec(contentType);
   return m?.[1];
 }
 
-// Sniff <meta charset="..."> or <meta http-equiv="Content-Type" content="...; charset=...">
-// inside the first ~1024 bytes of an HTML body. Returns undefined if not found.
+// Sniff a <meta> charset declaration in the first HTML_SNIFF_BYTES of the body.
+// Catches both <meta charset="..."> and <meta http-equiv="Content-Type" content="...; charset=...">
+// (the http-equiv form contains charset=X in its content attr, so one regex matches both).
+// HTML comments are stripped first so a commented-out meta cannot win.
 function sniffHtmlMetaCharset(buf: ArrayBuffer): string | undefined {
-  const head = new Uint8Array(buf, 0, Math.min(1024, buf.byteLength));
-  // ASCII-decode for scanning; meta declarations are pure ASCII.
-  const text = new TextDecoder("latin1").decode(head);
-  // <meta charset="...">
-  const direct = /<meta[^>]+charset\s*=\s*["']?([A-Za-z0-9_:.\-+]+)/i.exec(text);
-  if (direct) return direct[1];
-  // <meta http-equiv="Content-Type" content="text/html; charset=...">
-  const httpEquiv = /<meta[^>]+http-equiv\s*=\s*["']?content-type["']?[^>]*content\s*=\s*["'][^"']*charset\s*=\s*([A-Za-z0-9_:.\-+]+)/i.exec(text);
-  if (httpEquiv) return httpEquiv[1];
-  return undefined;
+  const head = new Uint8Array(buf, 0, Math.min(HTML_SNIFF_BYTES, buf.byteLength));
+  // iso-8859-1 is a byte-preserving decode; meta declarations are pure ASCII.
+  const raw = new TextDecoder("iso-8859-1").decode(head);
+  const text = raw.replace(/<!--[\s\S]*?-->/g, "");
+  const m = /<meta\s[^>]*charset\s*=\s*["']?([A-Za-z0-9_:.\-+]+)/i.exec(text);
+  return m?.[1];
 }
 
 function tryDecode(buf: ArrayBuffer, charset: string): string | undefined {
@@ -47,22 +46,27 @@ function tryDecode(buf: ArrayBuffer, charset: string): string | undefined {
   }
 }
 
+function pickCharset(
+  response: Response,
+  buf: ArrayBuffer,
+  kind: "html" | "json" | "text",
+): string | undefined {
+  const httpCharset = parseCharset(response.headers.get("content-type") ?? "");
+  if (httpCharset) return httpCharset;
+  if (kind === "html") return sniffHtmlMetaCharset(buf);
+  return undefined;
+}
+
 async function decodeBody(
   response: Response,
   kind: "html" | "json" | "text",
 ): Promise<string> {
   const buf = await response.arrayBuffer();
-  const httpCharset = parseCharset(response.headers.get("content-type") ?? "");
-  if (httpCharset) {
-    const decoded = tryDecode(buf, httpCharset);
+  const charset = pickCharset(response, buf, kind);
+  if (charset) {
+    const decoded = tryDecode(buf, charset);
     if (decoded !== undefined) return decoded;
     // unknown encoding label — fall through to utf-8
-  } else if (kind === "html") {
-    const metaCharset = sniffHtmlMetaCharset(buf);
-    if (metaCharset) {
-      const decoded = tryDecode(buf, metaCharset);
-      if (decoded !== undefined) return decoded;
-    }
   }
   return new TextDecoder("utf-8").decode(buf);
 }

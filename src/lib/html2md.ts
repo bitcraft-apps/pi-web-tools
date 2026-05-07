@@ -17,10 +17,13 @@ async function commandExists(cmd: string): Promise<boolean> {
 
 export type Converter = "pandoc" | "w3m";
 
+let cachedConverter: Converter | null | undefined;
+
 export async function detectConverter(): Promise<Converter | null> {
-  if (await commandExists("pandoc")) return "pandoc";
-  if (await commandExists("w3m")) return "w3m";
-  return null;
+  if (cachedConverter !== undefined) return cachedConverter;
+  if (await commandExists("pandoc")) return (cachedConverter = "pandoc");
+  if (await commandExists("w3m")) return (cachedConverter = "w3m");
+  return (cachedConverter = null);
 }
 
 function runConverter(cmd: string, args: string[], stdin: string): Promise<string> {

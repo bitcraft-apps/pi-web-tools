@@ -473,6 +473,126 @@ describe("Cloudflare retry hack", () => {
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/JS|cannot fetch/i);
   });
+
+  // Issue #59: CF detection now reads only the first 4 KB of the body.
+
+  it("detects CF markers in first 1 KB of a 403 body", async () => {
+    const html = "<html><head><title>Just a moment...</title></head><body>cf-chl-bypass</body></html>";
+    const mock = vi.fn()
+      .mockResolvedValueOnce(new Response(html, {
+        status: 403,
+        headers: new Headers({ "content-type": "text/html" }),
+      }))
+      .mockResolvedValueOnce(new Response("<h1>OK</h1>", {
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+      }));
+    global.fetch = mock as any;
+
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does NOT detect CF when markers sit past the 4 KB sniff window", async () => {
+    // 5 KB of padding before the marker — acceptable miss, documented in code.
+    const padding = "x".repeat(5000);
+    const html = `<html><body>${padding}Just a moment...</body></html>`;
+    const mock = vi.fn().mockResolvedValueOnce(
+      new Response(html, {
+        status: 403,
+        headers: new Headers({ "content-type": "text/html" }),
+      }),
+    );
+    global.fetch = mock as any;
+
+    // Falls through to the regular 403 throw path — no retry attempted.
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT detect CF on a plain 403 with no markers", async () => {
+    const mock = vi.fn().mockResolvedValueOnce(
+      new Response("<h1>Forbidden</h1><p>You don't have permission.</p>", {
+        status: 403,
+        headers: new Headers({ "content-type": "text/html" }),
+      }),
+    );
+    global.fetch = mock as any;
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("detects CF when the marker ends exactly at the 4 KB sniff boundary", async () => {
+    // Marker fully inside the 4096-byte window with its last byte at 4095.
+    const marker = "Just a moment";
+    const prefix = "<html><body>";
+    const padLen = 4096 - prefix.length - marker.length;
+    const html = `${prefix}${"x".repeat(padLen)}${marker}...</body></html>`;
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(html, { status: 403, headers: new Headers({ "content-type": "text/html" }) }),
+      )
+      .mockResolvedValueOnce(
+        new Response("<h1>ok</h1>", { status: 200, headers: new Headers({ "content-type": "text/html" }) }),
+      );
+    global.fetch = mock as any;
+
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+
+  it("misses CF when the marker straddles the 4 KB sniff boundary (documented tradeoff)", async () => {
+    // Pin the bounded-read tradeoff: a marker whose bytes cross 4096 is
+    // truncated and the regex misses. If this ever needs to change, the
+    // reader must over-read by at least max(marker_length) bytes.
+    const marker = "Just a moment";
+    const prefix = "<html><body>";
+    // First byte of marker at 4090 → marker spans bytes 4090..4102, crosses 4096.
+    const padLen = 4090 - prefix.length;
+    const html = `${prefix}${"x".repeat(padLen)}${marker}...</body></html>`;
+    const mock = vi.fn().mockResolvedValueOnce(
+      new Response(html, { status: 403, headers: new Headers({ "content-type": "text/html" }) }),
+    );
+    global.fetch = mock as any;
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not buffer a multi-MB 403 body just to sniff", async () => {
+    // Streamed 6 MB 403 body in 256 KB chunks; if isCloudflareChallenge
+    // naively clone().text()'d it, the consumer would pull every chunk.
+    // With the bounded reader we cancel after 4 KB — i.e. after the *first*
+    // 256 KB chunk — so most enqueues should never be pulled.
+    const totalBytes = 6 * 1024 * 1024;
+    const chunkSize = 256 * 1024;
+    const totalChunks = totalBytes / chunkSize;
+    let enqueued = 0;
+    const stream = new ReadableStream({
+      pull(controller) {
+        if (enqueued >= totalChunks) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(new Uint8Array(chunkSize).fill(0x78));
+        enqueued++;
+      },
+    });
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      new Response(stream, {
+        status: 403,
+        headers: new Headers({ "content-type": "text/html" }),
+      }),
+    ) as any;
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
+    // Sniff window is 4 KB; one 256 KB chunk satisfies it. Anything close to
+    // `totalChunks` would mean we drained the whole body.
+    expect(enqueued).toBeLessThan(totalChunks);
+    expect(enqueued).toBeLessThanOrEqual(2);
+  });
 });
 
 import { webfetchTool } from "../src/webfetch.js";

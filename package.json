@@ -16,6 +16,13 @@
       "./index.ts"
     ]
   },
+  "files": [
+    "index.ts",
+    "src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-ai": "*",
@@ -39,6 +46,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/bitcraft-apps/pi-web-tools.git"
+    "url": "git+https://github.com/bitcraft-apps/pi-web-tools.git"
   }
 }

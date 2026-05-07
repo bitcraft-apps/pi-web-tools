@@ -43,10 +43,37 @@ jobs:
 
       # Node 22.x ships with npm >= 11.5.1, required for npm Trusted Publishing (OIDC).
       # Node 20 ships npm 10.x which doesn't speak the trusted-publisher token exchange.
+      # NOTE: '22.x' floats across minors. We don't pin tighter because we assert the
+      # actual npm version below — that fails loud if a future Node 22.x ever regresses
+      # npm under 11.5.1, instead of silently falling back to a non-OIDC code path.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
+
+      # setup-node writes ~/.npmrc with `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`.
+      # Under Trusted Publishing we deliberately do NOT set NODE_AUTH_TOKEN, so that line
+      # would resolve to an empty token. Strip it defensively so npm 11.5.1 can't ever
+      # interpret a bogus stale entry instead of taking the OIDC path.
+      - name: scrub stale _authToken from .npmrc (OIDC only)
+        run: |
+          if [ -f "$HOME/.npmrc" ]; then
+            sed -i '/_authToken=/d' "$HOME/.npmrc"
+            echo "--- ~/.npmrc after scrub ---"
+            cat "$HOME/.npmrc" || true
+          fi
+
+      # Fail loud if npm is too old for Trusted Publishing instead of silently 401-ing
+      # (or worse, falling back to an unauthenticated/legacy publish path).
+      - name: assert npm >= 11.5.1 (Trusted Publishing minimum)
+        run: |
+          npm_version=$(npm --version)
+          echo "npm version: ${npm_version}"
+          node -e "
+            const [a,b,c] = process.argv[1].split('.').map(Number);
+            const ok = a > 11 || (a === 11 && (b > 5 || (b === 5 && c >= 1)));
+            if (!ok) { console.error('npm ' + process.argv[1] + ' < 11.5.1 — Trusted Publishing unsupported'); process.exit(1); }
+          " "${npm_version}"
 
       # No build step (jiti loads raw .ts at consumer side) and no install needed
       # to publish — only devDependencies exist and they aren't part of the tarball.
@@ -57,6 +84,10 @@ jobs:
       # gated server-side on the trusted publisher registered for this package
       # (org: bitcraft-apps, repo: pi-web-tools, workflow: release-please.yml).
       # No NPM_TOKEN secret needed.
+      #
+      # TODO(#21): after the first successful OIDC publish, delete the NPM_TOKEN org
+      # secret so it doesn't linger as a forgotten long-lived credential. Tracked in
+      # the follow-up task list on issue #21.
       - name: publish to npm (skip if version already exists)
         run: |
           name=$(node -p "require('./package.json').name")

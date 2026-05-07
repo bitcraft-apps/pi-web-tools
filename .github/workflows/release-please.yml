@@ -61,24 +61,11 @@ jobs:
           node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
 
-      # Node 22 LTS bundles npm 10.9.x — below the 11.5.1 floor the npm registry
-      # enforces for Trusted Publishing (OIDC). Trusted Publishing client support
-      # actually landed in npm 11.5.0; 11.5.1 is the minimum the registry accepts.
-      #
-      # Why corepack instead of `npm i -g 'npm@>=11.5.1 <12'`: the previously bundled
-      # npm 10.x in the hosted toolcache has shipped broken at least twice (missing
-      # transitive `promise-retry`), and a broken bundled npm cannot self-upgrade —
-      # `npm i -g` exits before the install begins. corepack is a separate Node-shipped
-      # binary with no dependency on the bundled npm package, so it can install a
-      # working npm even when the bundled one is corrupt. See #32 (which added the
-      # original `npm i -g` step) and #42 (which broke that step and motivated this
-      # switch).
-      #
-      # Why exact `11.5.1` instead of a floating range: `corepack install -g` takes a
-      # single concrete version, not a semver range, so we'd have to pick one anyway.
-      # Pinning the documented registry floor keeps CI deterministic and bumps
-      # conscious. The assert step below remains the loud-failure backstop if a future
-      # edit ever lowers this below the Trusted Publishing floor.
+      # Node 22 LTS bundles npm 10.9.x; npm registry requires >= 11.5.1 for Trusted
+      # Publishing (OIDC). corepack is used instead of `npm i -g` because the bundled
+      # npm 10.x has shipped broken in the toolcache and can't self-upgrade (see #42).
+      # `corepack install -g` needs a concrete version, so 11.5.1 is pinned exactly;
+      # the assert step below is the loud-failure backstop.
       - name: install npm 11.5.1 via corepack (bypass broken bundled npm, see #42)
         run: |
           corepack enable npm

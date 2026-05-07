@@ -237,6 +237,8 @@ async function fetchWithRedirects(url: URL, userAgent: string): Promise<Response
 // challenge sniff path — we only need the first ~few KB of HTML to decide,
 // and reading a multi-MB 403 body just to throw a moment later is wasteful.
 async function readBodyPrefix(response: Response, max: number): Promise<string> {
+  // body is null for HEAD/204/205/304 responses; CF challenge sniff only
+  // runs on status===403 GETs in practice, but guard anyway.
   const reader = response.body?.getReader();
   if (!reader) return "";
   const chunks: Uint8Array[] = [];
@@ -247,21 +249,19 @@ async function readBodyPrefix(response: Response, max: number): Promise<string> 
       if (done) break;
       const remaining = max - total;
       if (remaining <= 0) break;
-      if (value.byteLength <= remaining) {
-        chunks.push(value);
-        total += value.byteLength;
-      } else {
-        chunks.push(value.subarray(0, remaining));
-        total = max;
-        break;
-      }
+      const take = Math.min(value.byteLength, remaining);
+      chunks.push(take === value.byteLength ? value : value.subarray(0, take));
+      total += take;
+      if (total >= max) break;
     }
   } finally {
     try { await reader.cancel(); } catch { /* already closed */ }
     try { reader.releaseLock(); } catch { /* already released */ }
   }
-  // CF challenge tokens ("just a moment", "cf-chl-bypass") are pure ASCII;
-  // utf-8 decoding the first few KB is safe for the regex match below.
+  // Hard cut at `max` bytes can split a multi-byte UTF-8 sequence at the
+  // tail, producing a trailing U+FFFD. Safe here because the only consumer
+  // matches ASCII-only markers (see isCloudflareChallenge); revisit if the
+  // marker list ever gains non-ASCII tokens.
   const buf = new Uint8Array(total);
   let offset = 0;
   for (const c of chunks) { buf.set(c, offset); offset += c.byteLength; }
@@ -288,6 +288,9 @@ async function isCloudflareChallenge(response: Response): Promise<boolean> {
   //     blocks until the other drains, so cancelling only the clone can
   //     deadlock when the original is never consumed.
   const prefix = await readBodyPrefix(response, CF_SNIFF_BYTES);
+  // ASCII-only markers — required, because `prefix` may have a truncated
+  // UTF-8 sequence at the tail (see readBodyPrefix). Do not add non-ASCII
+  // alternatives here without switching to a streaming/incremental decoder.
   return /just a moment|cf-chl-bypass/i.test(prefix);
 }
 

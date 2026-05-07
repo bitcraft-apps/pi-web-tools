@@ -17,10 +17,21 @@ async function commandExists(cmd: string): Promise<boolean> {
 
 export type Converter = "pandoc" | "w3m";
 
+let cachedDetection: Promise<Converter | null> | undefined;
+
 export async function detectConverter(): Promise<Converter | null> {
-  if (await commandExists("pandoc")) return "pandoc";
-  if (await commandExists("w3m")) return "w3m";
-  return null;
+  if (cachedDetection !== undefined) return cachedDetection;
+  cachedDetection = (async () => {
+    if (await commandExists("pandoc")) return "pandoc";
+    if (await commandExists("w3m")) return "w3m";
+    return null;
+  })();
+  return cachedDetection;
+}
+
+/** Test-only: clear the cached converter detection. */
+export function __resetConverterCache(): void {
+  cachedDetection = undefined;
 }
 
 function runConverter(cmd: string, args: string[], stdin: string): Promise<string> {

@@ -54,11 +54,8 @@ jobs:
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
 
-      # Node 22.x ships with npm >= 11.5.1, required for npm Trusted Publishing (OIDC).
-      # Node 20 ships npm 10.x which doesn't speak the trusted-publisher token exchange.
-      # NOTE: '22.x' floats across minors. We don't pin tighter because we assert the
-      # actual npm version below — that fails loud if a future Node 22.x ever regresses
-      # npm under 11.5.1, instead of silently falling back to a non-OIDC code path.
+      # Node 22.x ships with npm >= 10.9.x. We swap it for 11.5.1 via corepack
+      # below — see the long comment on the install step for why.
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '22.x'
@@ -67,17 +64,25 @@ jobs:
       # Node 22 LTS bundles npm 10.9.x — below the 11.5.1 floor the npm registry
       # enforces for Trusted Publishing (OIDC). Trusted Publishing client support
       # actually landed in npm 11.5.0; 11.5.1 is the minimum the registry accepts.
-      # npm 11.x is bundled with Node 24, which is not yet LTS, so we keep Node
-      # on 22 LTS and decouple the npm version explicitly here.
       #
-      # Range is upper-bounded at <12 deliberately: a bare '^11.5.1' would float
-      # into npm 12.x on release and could silently reintroduce auth/registry
-      # regressions on a future CI run with no code change. When npm 12 ships,
-      # bump this consciously after verifying Trusted Publishing still works.
-      # The assert step below stays as the loud-failure backstop if this install
-      # ever no-ops.
-      - name: upgrade npm to >= 11.5.1 (Trusted Publishing minimum)
-        run: npm i -g 'npm@>=11.5.1 <12'
+      # Why corepack instead of `npm i -g 'npm@>=11.5.1 <12'`: the previously bundled
+      # npm 10.x in the hosted toolcache has shipped broken at least twice (missing
+      # transitive `promise-retry`), and a broken bundled npm cannot self-upgrade —
+      # `npm i -g` exits before the install begins. corepack is a separate Node-shipped
+      # binary with no dependency on the bundled npm package, so it can install a
+      # working npm even when the bundled one is corrupt. See #32 (which added the
+      # original `npm i -g` step) and #42 (which broke that step and motivated this
+      # switch).
+      #
+      # Why exact `11.5.1` instead of a floating range: `corepack install -g` takes a
+      # single concrete version, not a semver range, so we'd have to pick one anyway.
+      # Pinning the documented registry floor keeps CI deterministic and bumps
+      # conscious. The assert step below remains the loud-failure backstop if a future
+      # edit ever lowers this below the Trusted Publishing floor.
+      - name: install npm 11.5.1 via corepack (bypass broken bundled npm, see #42)
+        run: |
+          corepack enable npm
+          corepack install -g npm@11.5.1
 
       # setup-node writes ~/.npmrc with `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`.
       # Under Trusted Publishing we deliberately do NOT set NODE_AUTH_TOKEN, so that line

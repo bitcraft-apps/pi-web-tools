@@ -8,8 +8,16 @@ const EXTRACT_TIMEOUT_MS = 10_000;
 
 export type Extractor = "trafilatura" | "rdrview";
 
+// 50 MB peak-memory backstop on extractor stdout. Trafilatura should emit
+// less than its input on every realistic page; this only fires on a runaway
+// extractor (or someone feeding it a 200 MB single-page HTML dump). Combined
+// with EXTRACT_TIMEOUT_MS this keeps a misbehaving extractor from doubling
+// peak heap (input HTML is already in memory in the caller).
+const EXTRACT_MAX_BYTES = 50 * 1024 * 1024;
+
 let cachedDetection: Promise<Extractor | null> | undefined;
 let warnedNoExtractor = false;
+let warnedExtractorFailure = false;
 
 async function commandExists(cmd: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -38,10 +46,11 @@ export async function detectExtractor(): Promise<Extractor | null> {
   return cachedDetection;
 }
 
-/** Test-only: clear the cached extractor detection and the one-shot warning latch. */
+/** Test-only: clear the cached extractor detection and the one-shot warning latches. */
 export function __resetExtractorCache(): void {
   cachedDetection = undefined;
   warnedNoExtractor = false;
+  warnedExtractorFailure = false;
 }
 
 function runExtractor(cmd: string, args: string[], stdin: string): Promise<string> {
@@ -54,17 +63,28 @@ function runExtractor(cmd: string, args: string[], stdin: string): Promise<strin
     }
     const stdoutChunks: (Buffer | string)[] = [];
     const stderrChunks: (Buffer | string)[] = [];
+    let stdoutBytes = 0;
+    let overflowed = false;
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
     }, EXTRACT_TIMEOUT_MS);
 
-    child.stdout.on("data", (c: Buffer | string) => stdoutChunks.push(c));
+    child.stdout.on("data", (c: Buffer | string) => {
+      stdoutBytes += Buffer.isBuffer(c) ? c.length : Buffer.byteLength(c, "utf-8");
+      if (stdoutBytes > EXTRACT_MAX_BYTES) {
+        overflowed = true;
+        child.kill("SIGTERM");
+        return;
+      }
+      stdoutChunks.push(c);
+    });
     child.stderr.on("data", (c: Buffer | string) => stderrChunks.push(c));
     child.on("error", (err) => { clearTimeout(timer); reject(err); });
     child.on("close", (code) => {
       clearTimeout(timer);
+      if (overflowed) return reject(new Error(`${cmd} stdout exceeded ${EXTRACT_MAX_BYTES} bytes`));
       if (timedOut) return reject(new Error(`${cmd} timed out`));
       if (code !== 0) {
         const stderr = stderrChunks.map((c) => (Buffer.isBuffer(c) ? c.toString("utf-8") : c)).join("");
@@ -73,6 +93,12 @@ function runExtractor(cmd: string, args: string[], stdin: string): Promise<strin
       resolve(stdoutChunks.map((c) => (Buffer.isBuffer(c) ? c.toString("utf-8") : c)).join(""));
     });
 
+    // Swallow EPIPE/ECONNRESET on stdin: extractor may exit before consuming
+    // the full input (timeout, overflow kill, crash, or just deciding it has
+    // enough). Without this handler node treats the writable's "error" as
+    // unhandled and crashes the process. The close/error/timeout paths above
+    // already produce the right Promise outcome.
+    child.stdin.on("error", () => {});
     child.stdin.end(stdin);
   });
 }
@@ -107,13 +133,14 @@ export async function extractContent(html: string, url: string): Promise<string 
       // --html: emit cleaned HTML so the existing pandoc/w3m step gives a single
       //   canonical markdown style across extractor-on/off paths.
       // --no-comments: drop user-comment threads (noise for our use case).
-      // --precision: favor extraction precision over recall; chrome-stripping is
-      //   the goal, agent can re-fetch a different URL if content's missing.
+      // Default precision/recall balance: --precision was tried but biases
+      //   toward dropping borderline content (tables, code blocks adjacent to
+      //   the article body). Revisit if chrome leakage is too high in practice.
       // NOTE: trafilatura has no documented way to absolutify relative links
       //   when reading stdin; output keeps relative hrefs. rdrview's -u resolves.
       return await runExtractor(
         "trafilatura",
-        ["--html", "--no-comments", "--precision"],
+        ["--html", "--no-comments"],
         html,
       );
     }
@@ -125,7 +152,18 @@ export async function extractContent(html: string, url: string): Promise<string 
     const args = ["-H", "-u", url];
     if (process.platform === "darwin") args.push("--disable-sandbox");
     return await runExtractor("rdrview", args, html);
-  } catch {
+  } catch (err) {
+    if (!warnedExtractorFailure) {
+      warnedExtractorFailure = true;
+      // One-shot stderr warning so a permanently-broken extractor (bad install,
+      // version skew, sandbox denial) doesn't silently degrade every fetch.
+      // Mirrors the no-extractor warning above; never injected into tool output.
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[pi-web-tools/webfetch] Extractor "${ex}" failed; falling back to full HTML. ` +
+          `Subsequent failures are silent. First error: ${msg}`,
+      );
+    }
     return null;
   }
 }

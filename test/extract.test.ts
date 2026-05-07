@@ -18,6 +18,30 @@ function fakeChild(stdoutText: string, exitCode = 0, stderrText = "") {
   return ee;
 }
 
+/**
+ * Child that emits "close" *before* anyone calls stdin.end(), then has its
+ * stdin synchronously emit an EPIPE-class error on write. Models a real
+ * extractor that crashes / is killed by SIGTERM mid-input. Without an
+ * stdin.on("error") handler in the implementation, this would crash the
+ * process via unhandled "error" on a Writable.
+ */
+function fakeChildClosedEarly(exitCode = 1) {
+  const ee: any = new EventEmitter();
+  ee.stdout = Readable.from([""]);
+  ee.stderr = Readable.from([""]);
+  ee.stdin = new Writable({
+    write(_c, _e, cb) {
+      const err: any = new Error("write EPIPE");
+      err.code = "EPIPE";
+      cb(err);
+    },
+  });
+  ee.kill = () => {};
+  // Close fires before stdin.end() is called by the implementation.
+  process.nextTick(() => ee.emit("close", exitCode));
+  return ee;
+}
+
 import {
   detectExtractor,
   extractContent,
@@ -93,7 +117,7 @@ describe("extractContent", () => {
     expect(out).toBe("<article>clean</article>");
     const trafCall = (spawn as any).mock.calls.find((c: any[]) => c[0] === "trafilatura");
     expect(trafCall).toBeTruthy();
-    expect(trafCall[1]).toEqual(["--html", "--no-comments", "--precision"]);
+    expect(trafCall[1]).toEqual(["--html", "--no-comments"]);
   });
 
   it("invokes rdrview with -H -u <url> and platform-conditional --disable-sandbox", async () => {
@@ -141,5 +165,31 @@ describe("extractContent", () => {
     });
     await extractContent("<html>x</html>", "https://example.com");
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("survives extractor that closes before stdin.end() (EPIPE on write)", async () => {
+    (spawn as any).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
+      if (cmd === "trafilatura") return fakeChildClosedEarly(2);
+      return fakeChild("", 1);
+    });
+    // The implementation must attach stdin.on("error", ...) before .end(),
+    // otherwise the EPIPE bubbles to an unhandled "error" event on the
+    // Writable and crashes the test process. The Promise itself just resolves
+    // to null (extractor failure path).
+    expect(await extractContent("<html>x</html>".repeat(10000), "https://example.com")).toBeNull();
+  });
+
+  it("emits a one-shot stderr warning on first extractor failure", async () => {
+    (spawn as any).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
+      if (cmd === "trafilatura") return fakeChild("", 2, "boom");
+      return fakeChild("", 1);
+    });
+    expect(await extractContent("<html>x</html>", "https://example.com")).toBeNull();
+    expect(await extractContent("<html>y</html>", "https://example.com")).toBeNull();
+    expect(await extractContent("<html>z</html>", "https://example.com")).toBeNull();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toMatch(/Extractor "trafilatura" failed/);
   });
 });

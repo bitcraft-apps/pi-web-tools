@@ -29,6 +29,11 @@ function mockFetchOnce(opts: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks doesn't drain mockResolvedValueOnce queues. Reset and
+  // re-establish the default null so leftover queued values from one test
+  // can't leak into the next.
+  (extractContent as any).mockReset();
+  (extractContent as any).mockResolvedValue(null);
 });
 
 describe("fetchAsMarkdown", () => {
@@ -99,14 +104,18 @@ describe("fetchAsMarkdown", () => {
 
 describe("content extraction wire-in", () => {
   it("feeds extractor output to htmlToMarkdown when extraction succeeds", async () => {
-    (extractContent as any).mockResolvedValueOnce("<article>just the article</article>");
-    mockFetchOnce({ body: "<html><nav>chrome</nav><article>just the article</article></html>" });
+    // Body must be > 10 KB or the extractor is short-circuited.
+    // Extracted must be ≥ 1% of body or the suspicion-fallback discards it.
+    const article = "<article>" + "a".repeat(500) + "</article>"; // ~520 chars
+    const fullHtml = "<html><nav>chrome</nav>" + article + "x".repeat(20_000) + "</html>";
+    (extractContent as any).mockResolvedValueOnce(article);
+    mockFetchOnce({ body: fullHtml });
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(extractContent).toHaveBeenCalledWith(
-      expect.stringContaining("<article>just the article</article>"),
+      expect.stringContaining(article),
       "https://example.com",
     );
-    expect(htmlToMarkdown).toHaveBeenCalledWith("<article>just the article</article>");
+    expect(htmlToMarkdown).toHaveBeenCalledWith(article);
   });
 
   it("falls back to full HTML when extractor returns null", async () => {
@@ -126,14 +135,15 @@ describe("content extraction wire-in", () => {
     expect(htmlToMarkdown).toHaveBeenCalledWith(fullHtml);
   });
 
-  it("keeps small extracted output on small original (heuristic does not fire)", async () => {
-    // Original is < 10 KB, so even a tiny extracted result is trusted (legitimate short page).
+  it("short-circuits the extractor on small bodies (< 10 KB)", async () => {
+    // Below the 10 KB threshold the ratio guard can't fire, so the spawn
+    // overhead isn't worth it. extractContent must not be invoked at all;
+    // htmlToMarkdown gets the raw body.
     const smallHtml = "<html>" + "x".repeat(500) + "</html>";
-    const tinyExtracted = "<p>tiny</p>";
-    (extractContent as any).mockResolvedValueOnce(tinyExtracted);
     mockFetchOnce({ body: smallHtml });
     await fetchAsMarkdown({ url: "https://example.com" });
-    expect(htmlToMarkdown).toHaveBeenCalledWith(tinyExtracted);
+    expect(extractContent).not.toHaveBeenCalled();
+    expect(htmlToMarkdown).toHaveBeenCalledWith(smallHtml);
   });
 
   it("keeps extracted output when ratio >= 1% even on a large page", async () => {

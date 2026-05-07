@@ -196,7 +196,10 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // Readability false-negatives; it does not catch modes 3 (wrong-but-
   // substantial output) or 4 (stripped tables/code outside the article
   // container) — those are unfixable without semantic analysis.
-  const extracted = await extractContent(body, input.url);
+  // Skip the extractor subprocess entirely on small bodies: the ratio guard
+  // can't fire (gated on >10 KB), and on RSS items / API HTML / error pages
+  // the chrome-stripping win doesn't justify the spawn overhead.
+  const extracted = body.length < 10_000 ? null : await extractContent(body, input.url);
   const useExtracted =
     extracted !== null &&
     !(extracted.length < 0.01 * body.length && body.length > 10_000);

@@ -55,8 +55,9 @@ For chrome-heavy pages (GitHub repos, MDN, news articles, Stack Overflow, blog p
 
 ```bash
 pipx install trafilatura     # works everywhere with Python; recommended primary install
-# or, on Linux (no homebrew formula on macOS, build from source):
-#   https://github.com/eafer/rdrview
+# rdrview alternative — https://github.com/eafer/rdrview
+#   Linux: package manager, or build from source.
+#   macOS: build from source (no homebrew formula upstream).
 ```
 
 Detection order: `trafilatura` first, then `rdrview`. Detected once per process and cached. The extractor emits cleaned HTML; the existing `pandoc`/`w3m` step then converts it to markdown so the output style is identical regardless of which extractor (or none) ran.

@@ -1,0 +1,75 @@
+# THROWAWAY workflow — validates the corepack-based npm swap proposed in #42
+# before it lands in release-please.yml. Triggers on push to this PR's branch
+# only (workflow_dispatch can't be used here because GitHub only registers
+# dispatch handlers from the default branch). Deleted in the same PR that
+# merges the real fix.
+#
+# Goal: prove on the actual ubuntu-latest runner image that:
+#   1. corepack can install npm 11.5.1 without depending on the (sometimes broken)
+#      bundled npm in the hosted toolcache (the failure mode in #42).
+#   2. the resulting npm on PATH is 11.5.1 (assert step matches the real workflow).
+#   3. that npm can actually drive `publish --dry-run --provenance` end-to-end
+#      against this repo's package.json — exercising tarball assembly + provenance
+#      attestation generation. Does not hit the registry (dry-run), so no real
+#      OIDC token exchange — but `id-token: write` is still granted in case the
+#      attestation step needs to mint one.
+name: _validate-publish-npm (throwaway, see #42)
+
+on:
+  push:
+    branches: [ci/publish-npm-corepack]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: report bundled npm version (pre-swap)
+        run: |
+          echo "node: $(node --version)"
+          echo "bundled npm (pre-swap): $(npm --version)"
+          echo "corepack: $(corepack --version)"
+
+      - name: install npm 11.5.1 via corepack
+        run: |
+          corepack enable npm
+          corepack install -g npm@11.5.1
+          echo "npm after corepack swap: $(npm --version)"
+          echo "which npm: $(which npm)"
+          ls -la "$(which npm)" || true
+
+      - name: scrub stale _authToken from .npmrc (mirror real job)
+        run: |
+          if [ -f "$HOME/.npmrc" ]; then
+            sed -i '/_authToken=/d' "$HOME/.npmrc"
+            cat "$HOME/.npmrc" || true
+          fi
+
+      - name: assert npm >= 11.5.1 (mirror real job)
+        run: |
+          npm_version=$(npm --version)
+          echo "npm version: ${npm_version}"
+          node -e "
+            const [a,b,c] = process.argv[1].split('.').map(Number);
+            const ok = a > 11 || (a === 11 && (b > 5 || (b === 5 && c >= 1)));
+            if (!ok) { console.error('npm ' + process.argv[1] + ' < 11.5.1 — Trusted Publishing unsupported'); process.exit(1); }
+          " "${npm_version}"
+
+      - name: npm publish --dry-run --provenance (skip if version already published)
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "${name}@${version}" version >/dev/null 2>&1; then
+            echo "${name}@${version} already published — skipping dry-run (matches real job's guard)."
+          else
+            npm publish --access public --provenance --dry-run
+          fi

@@ -17,21 +17,27 @@ PRs are squash-merged. **The PR title is used verbatim as the squash commit subj
 
 ### Allowed types
 
-Use only the types release-please recognizes:
+Use only the types release-please recognizes. With this repo's default config (no `changelog-sections` override in `release-please-config.json`), the defaults apply:
 
-`feat`, `fix`, `perf`, `deps`, `revert`, `docs`, `style`, `chore`, `refactor`, `test`, `build`, `ci`
+`feat`, `fix`, `perf`, `revert`, `docs`, `style`, `chore`, `refactor`, `test`, `build`, `ci`
 
-- `feat:` → minor bump
-- `fix:`, `perf:`, `deps:`, `revert:` → patch bump
-- `docs:`, `style:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:` → no release, but still appear in changelog sections
+- `feat:` → minor bump, **Features** section
+- `fix:` → patch bump, **Bug Fixes** section
+- `perf:` → patch bump, **Performance Improvements** section
+- `revert:` → patch bump, **Reverts** section
+- `docs:`, `style:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:` → patch bump if they appear alone, but **hidden from CHANGELOG by default** (won't produce an entry)
 - `<type>!:` or a `BREAKING CHANGE:` footer → major bump
 
-### Common mistake: non-listed types silently skip the release
+Note: `deps` is **not** a default release-please type. Dependabot PRs in this repo use `ci(deps): …` (type `ci`, scope `deps`), which is hidden from the changelog.
 
-A subject like `security(webfetch): ...` looks conventional but is **not** in the list above, so release-please ignores it and no release is cut — even for user-visible fixes. Use `fix:` with a `security` scope or note instead:
+### Common mistake: unknown types produce no changelog entry and no version bump
+
+A subject like `security(webfetch): ...` looks conventional but `security` isn't a recognized type, so release-please neither bumps the version nor records a changelog entry — even for user-visible fixes. Use `fix:` with a `security` scope instead, so the change lands in **Bug Fixes** and triggers a patch:
 
 - ❌ `security(webfetch): re-validate URL on every redirect hop`
-- ✅ `fix(webfetch): re-validate URL on every redirect hop (security)`
+- ✅ `fix(security): re-validate URL on every redirect hop in webfetch`
+
+(The trailing `(security)` annotation seen in some prior commits is a soft convention, not enforced by any lint or template.)
 
 ### Examples from this repo
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.0](https://github.com/bitcraft-apps/pi-web-tools/compare/pi-web-tools-v0.2.0...pi-web-tools-v0.3.0) (2026-05-07)
+## [0.3.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v0.2.0...v0.3.0) (2026-05-07)
 
 
 ### Features
@@ -13,7 +13,7 @@
 
 * **webfetch:** memoize converter detection ([#26](https://github.com/bitcraft-apps/pi-web-tools/issues/26)) ([ae67089](https://github.com/bitcraft-apps/pi-web-tools/commit/ae6708926d50cedb70861701cd7c3c1a390e0656))
 
-## [0.2.0](https://github.com/bitcraft-apps/pi-web-tools/compare/pi-web-tools-v0.1.1...pi-web-tools-v0.2.0) (2026-05-07)
+## [0.2.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v0.1.1...v0.2.0) (2026-05-07)
 
 
 ### Features

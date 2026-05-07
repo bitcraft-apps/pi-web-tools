@@ -64,6 +64,21 @@ jobs:
           node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
 
+      # Node 22 LTS bundles npm 10.9.x — below the 11.5.1 floor the npm registry
+      # enforces for Trusted Publishing (OIDC). Trusted Publishing client support
+      # actually landed in npm 11.5.0; 11.5.1 is the minimum the registry accepts.
+      # npm 11.x is bundled with Node 24, which is not yet LTS, so we keep Node
+      # on 22 LTS and decouple the npm version explicitly here.
+      #
+      # Range is upper-bounded at <12 deliberately: a bare '^11.5.1' would float
+      # into npm 12.x on release and could silently reintroduce auth/registry
+      # regressions on a future CI run with no code change. When npm 12 ships,
+      # bump this consciously after verifying Trusted Publishing still works.
+      # The assert step below stays as the loud-failure backstop if this install
+      # ever no-ops.
+      - name: upgrade npm to >= 11.5.1 (Trusted Publishing minimum)
+        run: npm i -g 'npm@>=11.5.1 <12'
+
       # setup-node writes ~/.npmrc with `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`.
       # Under Trusted Publishing we deliberately do NOT set NODE_AUTH_TOKEN, so that line
       # would resolve to an empty token. Strip it defensively so npm 11.5.1 can't ever

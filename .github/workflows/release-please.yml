@@ -19,10 +19,23 @@ jobs:
       release_created: ${{ steps.rp.outputs.release_created }}
       tag_name: ${{ steps.rp.outputs.tag_name }}
     steps:
+      # Mint a short-lived installation token from the `bitcraft-release` GitHub App
+      # so release PRs/commits aren't authored by GITHUB_TOKEN. GitHub deliberately
+      # suppresses workflow runs for events produced by a workflow's own GITHUB_TOKEN
+      # (recursion guard, see issue #28). App-authored events bypass that guard, so
+      # the `vitest (bun)` check on `pull_request` actually runs on release PRs.
+      # SHA-pinned to v3.1.1 per the existing third-party-action hardening posture.
+      - id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: ${{ secrets.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+
       # Pinned to v4 tag commit (5c625bf) per GitHub hardening guidance for third-party actions.
       - id: rp
         uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
         with:
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 

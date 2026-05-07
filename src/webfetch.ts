@@ -1,5 +1,6 @@
 import { validateUrl } from "./lib/url-guard.js";
 import { htmlToMarkdown } from "./lib/html2md.js";
+import { extractContent } from "./lib/extract.js";
 import {
   ACCEPT_HEADER,
   BROWSER_UA,
@@ -182,7 +183,28 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   }
 
   // html
-  const md = await htmlToMarkdown(body);
+  // Content-extraction pre-pass: strip page chrome (nav/sidebar/footer/cookie
+  // banners/etc.) before pandoc/w3m. extractContent returns null when no
+  // extractor is on $PATH, the extractor failed, or it timed out — in all of
+  // those cases we fall back to the full HTML so the tool still produces
+  // output (the extractor is an optimization, not a contract).
+  //
+  // Skip the extractor on small bodies (RSS items, API HTML, error pages):
+  // the chrome-stripping win doesn't justify the spawn overhead. Then, if the
+  // extractor returned <1% of input, assume it picked the wrong container
+  // (e.g. a footer on a page with no <article>) and fall back to full HTML.
+  // Catches Readability false-negative modes 1 (empty) and 2 (trivial); does
+  // not catch modes 3 (wrong-but-substantial) or 4 (stripped tables/code) —
+  // unfixable without semantic analysis.
+  //
+  // body.length is JS string length (UTF-16 code units), not bytes. Both
+  // sides of the ratio compare in the same unit, so the guard itself is
+  // correct; the 10 KB threshold is fuzzy for non-ASCII pages but doesn't
+  // need to be tight. An extractor that returns literally "" passes the
+  // null-check and then 0 < 100, so it correctly falls back.
+  const extracted = body.length < 10_000 ? null : await extractContent(body, input.url);
+  const useExtracted = extracted !== null && extracted.length >= 0.01 * body.length;
+  const md = await htmlToMarkdown(useExtracted ? extracted : body);
   return truncate(md, maxChars);
 }
 
@@ -190,7 +212,7 @@ export const webfetchTool = defineTool({
   name: "webfetch",
   label: "Web Fetch",
   description:
-    "Fetch a URL and return its main text content as markdown. HTML is converted via pandoc or w3m. Use after `websearch` to read full content of a result, or directly when user gives you a URL. Cannot fetch binary content (PDF, images). Cannot reach localhost or RFC1918 link-local addresses.",
+    "Fetch a URL and return its main text content as markdown. HTML is converted via pandoc or w3m. If `trafilatura` or `rdrview` is on $PATH, runs a Reader-View-style extraction pre-pass to strip page chrome (nav/sidebar/footer), typically shrinking output 5–20× on chrome-heavy pages. Falls back transparently to the full page if no extractor is installed or extraction looks wrong. Use after `websearch` to read full content of a result, or directly when user gives you a URL. Cannot fetch binary content (PDF, images). Cannot reach localhost or RFC1918 link-local addresses.",
   parameters: Type.Object({
     url: Type.String({ description: "Absolute http(s) URL to fetch." }),
     max_chars: Type.Optional(

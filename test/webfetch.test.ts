@@ -4,8 +4,15 @@ vi.mock("../src/lib/html2md.js", () => ({
   htmlToMarkdown: vi.fn(async (html: string) => `MD:${html.slice(0, 20)}`),
 }));
 
+vi.mock("../src/lib/extract.js", () => ({
+  // Default: simulate "no extractor on $PATH" — returns null, fall through to
+  // full HTML. Individual tests override via mockImplementationOnce.
+  extractContent: vi.fn(async () => null),
+}));
+
 import { fetchAsMarkdown } from "../src/webfetch.js";
 import { htmlToMarkdown } from "../src/lib/html2md.js";
+import { extractContent } from "../src/lib/extract.js";
 
 function mockFetchOnce(opts: {
   status?: number;
@@ -22,6 +29,11 @@ function mockFetchOnce(opts: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks doesn't drain mockResolvedValueOnce queues. Reset and
+  // re-establish the default null so leftover queued values from one test
+  // can't leak into the next.
+  (extractContent as any).mockReset();
+  (extractContent as any).mockResolvedValue(null);
 });
 
 describe("fetchAsMarkdown", () => {
@@ -87,6 +99,82 @@ describe("fetchAsMarkdown", () => {
       headers: { "content-type": "text/html", "content-length": String(6 * 1024 * 1024) },
     });
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/too large/i);
+  });
+});
+
+describe("content extraction wire-in", () => {
+  it("feeds extractor output to htmlToMarkdown when extraction succeeds", async () => {
+    // Body must be > 10 KB or the extractor is short-circuited.
+    // Extracted must be ≥ 1% of body or the suspicion-fallback discards it.
+    const article = "<article>" + "a".repeat(500) + "</article>"; // ~520 chars
+    const fullHtml = "<html><nav>chrome</nav>" + article + "x".repeat(20_000) + "</html>";
+    (extractContent as any).mockResolvedValueOnce(article);
+    mockFetchOnce({ body: fullHtml });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(extractContent).toHaveBeenCalledWith(
+      expect.stringContaining(article),
+      "https://example.com",
+    );
+    expect(htmlToMarkdown).toHaveBeenCalledWith(article);
+  });
+
+  it("falls back to full HTML when extractor returns null", async () => {
+    (extractContent as any).mockResolvedValueOnce(null);
+    const fullHtml = "<html><nav>x</nav><p>body</p></html>";
+    mockFetchOnce({ body: fullHtml });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(htmlToMarkdown).toHaveBeenCalledWith(fullHtml);
+  });
+
+  it("falls back to full HTML when extracted < 1% of original AND original > 10 KB", async () => {
+    // Original > 10 KB, extracted way under 1%: triggers the suspicion fallback.
+    const fullHtml = "<html>" + "x".repeat(20_000) + "</html>";
+    (extractContent as any).mockResolvedValueOnce("<p>tiny</p>");
+    mockFetchOnce({ body: fullHtml });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(htmlToMarkdown).toHaveBeenCalledWith(fullHtml);
+  });
+
+  it("falls back to full HTML when extractor returns empty string on a large page", async () => {
+    // Empty-string output passes the `extracted !== null` guard; the ratio
+    // guard (0 >= 1% of 20 KB) is what saves us. Regression test for the
+    // "successful extractor returning literally '' triggers fallback" case.
+    const fullHtml = "<html>" + "x".repeat(20_000) + "</html>";
+    (extractContent as any).mockResolvedValueOnce("");
+    mockFetchOnce({ body: fullHtml });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(htmlToMarkdown).toHaveBeenCalledWith(fullHtml);
+  });
+
+  it("short-circuits the extractor on small bodies (< 10 KB)", async () => {
+    // Below the 10 KB threshold the ratio guard can't fire, so the spawn
+    // overhead isn't worth it. extractContent must not be invoked at all;
+    // htmlToMarkdown gets the raw body.
+    const smallHtml = "<html>" + "x".repeat(500) + "</html>";
+    mockFetchOnce({ body: smallHtml });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(extractContent).not.toHaveBeenCalled();
+    expect(htmlToMarkdown).toHaveBeenCalledWith(smallHtml);
+  });
+
+  it("keeps extracted output when ratio >= 1% even on a large page", async () => {
+    // Original > 10 KB, extracted is ~5% of it: ratio guard does not fire.
+    const fullHtml = "<html>" + "x".repeat(20_000) + "</html>";
+    const extracted = "<article>" + "y".repeat(1_500) + "</article>"; // > 1% of 20 KB
+    (extractContent as any).mockResolvedValueOnce(extracted);
+    mockFetchOnce({ body: fullHtml });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(htmlToMarkdown).toHaveBeenCalledWith(extracted);
+  });
+
+  it("never invokes the extractor for non-HTML responses", async () => {
+    mockFetchOnce({ body: '{"a":1}', headers: { "content-type": "application/json" } });
+    await fetchAsMarkdown({ url: "https://example.com/x.json" });
+    expect(extractContent).not.toHaveBeenCalled();
+
+    mockFetchOnce({ body: "plain text", headers: { "content-type": "text/plain" } });
+    await fetchAsMarkdown({ url: "https://example.com/x.txt" });
+    expect(extractContent).not.toHaveBeenCalled();
   });
 });
 

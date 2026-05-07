@@ -80,11 +80,52 @@ function pickCharset(
   return undefined;
 }
 
+// Read the response body into an ArrayBuffer, aborting if the running total
+// exceeds MAX_RESPONSE_BYTES. The Content-Length pre-check in fetchAsMarkdown
+// is a fast-path rejection (saves a connection on honest servers); this
+// function is the actual enforcement — a server that omits or lies about
+// Content-Length still cannot OOM the agent process.
+async function readBoundedBody(response: Response): Promise<ArrayBuffer> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    // No streaming body (synthetic Response with empty body, etc.).
+    return await response.arrayBuffer();
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_RESPONSE_BYTES) {
+        // Cancel the stream so the underlying connection is released; without
+        // this, undici keeps the socket alive trying to drain the rest.
+        try { await reader.cancel(); } catch { /* already closed */ }
+        throw new Error(
+          `Response too large (>${(MAX_RESPONSE_BYTES / 1024 / 1024).toFixed(0)} MB streamed, max 5 MB)`,
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    try { reader.releaseLock(); } catch { /* already released */ }
+  }
+  // Concat into a single ArrayBuffer for decodeBody's TextDecoder + meta sniff.
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out.buffer;
+}
+
 async function decodeBody(
   response: Response,
   kind: BodyKind,
 ): Promise<string> {
-  const buf = await response.arrayBuffer();
+  const buf = await readBoundedBody(response);
   const charset = pickCharset(response, buf, kind);
   if (charset) {
     const decoded = tryDecode(buf, charset);

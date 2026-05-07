@@ -100,6 +100,81 @@ describe("fetchAsMarkdown", () => {
     });
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/too large/i);
   });
+
+  // Issue #58: streaming-byte-cap. Content-Length is a fast-path; the real
+  // enforcement reads the stream and aborts at MAX_RESPONSE_BYTES.
+
+  it("rejects response > 5MB when Content-Length is missing (chunked)", async () => {
+    // Construct a streamed Response with no Content-Length, body > 5 MB.
+    // ReadableStream so undici can't infer length from the source.
+    const big = new Uint8Array(6 * 1024 * 1024);
+    big.fill(0x78); // 'x'
+    const stream = new ReadableStream({
+      start(controller) {
+        // Push in 256 KB chunks so the cap fires mid-stream rather than on
+        // the first read — exercises the per-chunk accumulator path.
+        const chunkSize = 256 * 1024;
+        for (let off = 0; off < big.byteLength; off += chunkSize) {
+          controller.enqueue(big.slice(off, off + chunkSize));
+        }
+        controller.close();
+      },
+    });
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      new Response(stream, {
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+      }),
+    ) as any;
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/too large/i);
+  });
+
+  it("rejects response > 5MB when Content-Length lies (says 1 KB, sends 6 MB)", async () => {
+    const big = new Uint8Array(6 * 1024 * 1024).fill(0x78);
+    const stream = new ReadableStream({
+      start(controller) {
+        const chunkSize = 256 * 1024;
+        for (let off = 0; off < big.byteLength; off += chunkSize) {
+          controller.enqueue(big.slice(off, off + chunkSize));
+        }
+        controller.close();
+      },
+    });
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      new Response(stream, {
+        status: 200,
+        headers: new Headers({
+          "content-type": "text/html",
+          // Lying — says 1 KB.
+          "content-length": "1024",
+        }),
+      }),
+    ) as any;
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/too large/i);
+  });
+
+  it("accepts honest 4 MB response just under the cap", async () => {
+    const four = new Uint8Array(4 * 1024 * 1024).fill(0x78);
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(four);
+        controller.close();
+      },
+    });
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      new Response(stream, {
+        status: 200,
+        headers: new Headers({ "content-type": "text/plain" }),
+      }),
+    ) as any;
+
+    const out = await fetchAsMarkdown({ url: "https://example.com" });
+    // text/plain path: body returned unchanged but truncated by max_chars
+    // (default 50_000), so we just confirm we got something and didn't throw.
+    expect(out.length).toBeGreaterThan(0);
+  });
 });
 
 describe("content extraction wire-in", () => {

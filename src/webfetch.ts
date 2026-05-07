@@ -154,7 +154,7 @@ async function fetchWithRedirects(url: URL, userAgent: string): Promise<Response
     if (!isRedirect(response.status)) return response;
     const location = response.headers.get("location");
     if (!location) return response; // 3xx with no Location — let caller handle.
-    // Drain and discard the redirect body to free the connection.
+    // Discard the redirect body (without draining) to free the connection.
     try { await response.body?.cancel(); } catch { /* already closed */ }
     let next: URL;
     try {

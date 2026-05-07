@@ -480,6 +480,10 @@ describe("redirect re-validation (issue #57)", () => {
     let i = 0;
     const mock = vi.fn().mockImplementation(async () => {
       // Deterministic counter — each hop redirects to a fresh public URL.
+      // example0..example5.com aren't IANA-reserved, but validateUrl currently
+      // does no DNS resolution — it's a syntactic + scheme/host-shape guard.
+      // If a future guard resolves+checks IPs (see DNS-rebinding follow-up),
+      // swap these for sub-labels of example.com (which IS reserved).
       return redirectResponse(`https://example${i++}.com/`);
     });
     global.fetch = mock as any;
@@ -488,12 +492,12 @@ describe("redirect re-validation (issue #57)", () => {
   });
 
   it("returns a 3xx with no Location instead of looping", async () => {
-    // Synthesize a 3xx that allows a body (300/305 do; 304/204/205/301 do not
-    // per the Response constructor's spec checks). 305 is fine for our purpose:
-    // proves no Location → no loop, response handed back to caller.
+    // Synthesize a 3xx that allows a body. Null-body statuses per the Fetch
+    // spec are 101/103/204/205/304, so 300 Multiple Choices works and avoids
+    // 305 Use Proxy (deprecated, increasingly filtered by clients/parsers).
     const mock = vi.fn().mockResolvedValueOnce(
       new Response("<h1>weird 3xx</h1>", {
-        status: 305,
+        status: 300,
         headers: new Headers({ "content-type": "text/html" }),
       }),
     );

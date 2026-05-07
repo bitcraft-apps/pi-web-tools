@@ -14,8 +14,11 @@ Shell-only web search and fetch tools for [pi.dev](https://pi.dev). **Zero API k
 brew install ddgr pandoc        # macOS
 # or: pip install ddgr; apt install pandoc w3m
 
-# 2. Extension (from git for now; npm coming in v0.2)
-pi install git:https://github.com/bitcraft-apps/pi-web-tools
+# 2. Extension (from npm)
+pi install npm:@bitcraft-apps/pi-web-tools
+
+# Or pin a specific version:
+# pi install npm:@bitcraft-apps/pi-web-tools@0.2.0
 
 # Or for local dev / hacking on the source:
 pi install -e /path/to/pi-web-tools
@@ -64,7 +67,7 @@ bun run test:network        # integration tests (requires net)
 
 We use **bun** as the dev package manager. The committed lockfile is `bun.lock`; `package-lock.json` is gitignored.
 
-> Caveat for end-user installs: `pi install git:...` runs `npm install` under the hood, which ignores `bun.lock` and re-resolves transitive deps against the registry. End-user installs are therefore not byte-reproducible until we publish to npm in v0.2 (#5). Acceptable for now: peer deps are wildcard-pinned and we have no runtime deps that drift in breaking ways.
+> End-user installs (`pi install npm:...`) pull a published tarball from the npm registry. The tarball ships only `index.ts`, `src/`, `README.md`, `LICENSE`, and `CHANGELOG.md` (no tests, no `bun.lock`, no CI configs) — see `files` in `package.json`. `bun.lock` is the dev lockfile only; transitive deps for end users are resolved by `npm install` against the registry at install time. Peer deps are wildcard-pinned, no runtime deps drift in breaking ways.
 
 > Note on npm scope: the GitHub org is `bitcraft-apps` because `bitcraft` was taken on GitHub. The npm scope `@bitcraft` is also taken, so the npm package is published as `@bitcraft-apps/pi-web-tools` to mirror the GH org (#5).
 

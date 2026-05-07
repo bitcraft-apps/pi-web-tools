@@ -41,14 +41,22 @@ jobs:
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
 
+      # Node 22.x ships with npm >= 11.5.1, required for npm Trusted Publishing (OIDC).
+      # Node 20 ships npm 10.x which doesn't speak the trusted-publisher token exchange.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20.x'
+          node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
 
       # No build step (jiti loads raw .ts at consumer side) and no install needed
       # to publish — only devDependencies exist and they aren't part of the tarball.
       # Guard against re-runs on an already-published tag (npm would 403 otherwise).
+      #
+      # Auth: npm Trusted Publishing via OIDC. The id-token: write permission above
+      # lets npm exchange the GitHub OIDC token for a short-lived publish credential,
+      # gated server-side on the trusted publisher registered for this package
+      # (org: bitcraft-apps, repo: pi-web-tools, workflow: release-please.yml).
+      # No NPM_TOKEN secret needed.
       - name: publish to npm (skip if version already exists)
         run: |
           name=$(node -p "require('./package.json').name")
@@ -58,5 +66,3 @@ jobs:
           else
             npm publish --access public --provenance
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -21,12 +21,13 @@ Every registered tool's name, description, and schema is loaded into every agent
 turn that imports this package. New tools are not free — they're a recurring
 prompt-token cost paid by every user, including users who never invoke them.
 
-Before proposing a new tool, in order: (1) can existing primitives plus one
-sentence in the caller's prompt do it? — do nothing. (2) can existing primitives
-do it but produce wasteful output? — improve the primitive with a sane default.
-(3) is it specific to one site, API, or CLI? — belongs in a personal skill
-(`~/.pi/agent/skills/`) or a separate package, not here.
+Before proposing a new tool, in order:
 
-`webfetch` deliberately does not contain per-host routing (no `if hostname ===
-"github.com"` branches). The agent picks the right CLI for the host; this
-package provides general primitives only.
+1. Can existing primitives plus one sentence in the caller's prompt do it? — do nothing.
+2. Can existing primitives do it but produce wasteful output? — improve the primitive with a sane default.
+3. Is it specific to one site, API, or CLI? — belongs in a personal skill (`~/.pi/agent/skills/`) or a separate package, not here.
+
+`webfetch` deliberately does not contain per-host routing inside this package —
+no `if hostname === "github.com"` branches, and no autodetection shims like
+"if `gh` is on PATH, reroute github.com URLs through it." The agent picks the
+right CLI for the host; this package provides general primitives only.

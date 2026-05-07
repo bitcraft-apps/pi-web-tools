@@ -473,6 +473,84 @@ describe("Cloudflare retry hack", () => {
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/JS|cannot fetch/i);
   });
+
+  // Issue #59: CF detection now reads only the first 4 KB of the body.
+
+  it("detects CF markers in first 1 KB of a 403 body", async () => {
+    const html = "<html><head><title>Just a moment...</title></head><body>cf-chl-bypass</body></html>";
+    const mock = vi.fn()
+      .mockResolvedValueOnce(new Response(html, {
+        status: 403,
+        headers: new Headers({ "content-type": "text/html" }),
+      }))
+      .mockResolvedValueOnce(new Response("<h1>OK</h1>", {
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+      }));
+    global.fetch = mock as any;
+
+    await fetchAsMarkdown({ url: "https://example.com" });
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does NOT detect CF when markers sit past the 4 KB sniff window", async () => {
+    // 5 KB of padding before the marker — acceptable miss, documented in code.
+    const padding = "x".repeat(5000);
+    const html = `<html><body>${padding}Just a moment...</body></html>`;
+    const mock = vi.fn().mockResolvedValueOnce(
+      new Response(html, {
+        status: 403,
+        headers: new Headers({ "content-type": "text/html" }),
+      }),
+    );
+    global.fetch = mock as any;
+
+    // Falls through to the regular 403 throw path — no retry attempted.
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT detect CF on a plain 403 with no markers", async () => {
+    const mock = vi.fn().mockResolvedValueOnce(
+      new Response("<h1>Forbidden</h1><p>You don't have permission.</p>", {
+        status: 403,
+        headers: new Headers({ "content-type": "text/html" }),
+      }),
+    );
+    global.fetch = mock as any;
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not buffer a multi-MB 403 body just to sniff", async () => {
+    // Streamed 6 MB 403 body; if isCloudflareChallenge naively clone().text()'d
+    // it, this would either OOM or take a long time. With the bounded reader
+    // we cancel after 4 KB and the sniff returns quickly with no CF match.
+    const big = new Uint8Array(6 * 1024 * 1024).fill(0x78);
+    const stream = new ReadableStream({
+      start(controller) {
+        const chunkSize = 256 * 1024;
+        for (let off = 0; off < big.byteLength; off += chunkSize) {
+          controller.enqueue(big.slice(off, off + chunkSize));
+        }
+        controller.close();
+      },
+    });
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      new Response(stream, {
+        status: 403,
+        headers: new Headers({ "content-type": "text/html" }),
+      }),
+    ) as any;
+
+    const start = Date.now();
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
+    // Loose ceiling — the bounded sniff should be ~ms; 1s is well above any
+    // reasonable execution but still well below what a full clone+drain would
+    // cost. Tightening this risks flake on loaded CI.
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
 });
 
 import { webfetchTool } from "../src/webfetch.js";

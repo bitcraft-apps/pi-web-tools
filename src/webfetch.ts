@@ -232,12 +232,63 @@ async function fetchWithRedirects(url: URL, userAgent: string): Promise<Response
   throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
 }
 
+// Read up to `max` bytes from the response stream and discard the rest.
+// Cancels the reader so the connection is released. Used by the CF
+// challenge sniff path — we only need the first ~few KB of HTML to decide,
+// and reading a multi-MB 403 body just to throw a moment later is wasteful.
+async function readBodyPrefix(response: Response, max: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = max - total;
+      if (remaining <= 0) break;
+      if (value.byteLength <= remaining) {
+        chunks.push(value);
+        total += value.byteLength;
+      } else {
+        chunks.push(value.subarray(0, remaining));
+        total = max;
+        break;
+      }
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* already closed */ }
+    try { reader.releaseLock(); } catch { /* already released */ }
+  }
+  // CF challenge tokens ("just a moment", "cf-chl-bypass") are pure ASCII;
+  // utf-8 decoding the first few KB is safe for the regex match below.
+  const buf = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) { buf.set(c, offset); offset += c.byteLength; }
+  return new TextDecoder("utf-8", { fatal: false }).decode(buf);
+}
+
+const CF_SNIFF_BYTES = 4096;
+
 async function isCloudflareChallenge(response: Response): Promise<boolean> {
   if (response.headers.get("cf-mitigated") === "challenge") return true;
   if (response.status !== 403) return false;
-  const clone = response.clone();
-  const body = await clone.text();
-  return /just a moment|cf-chl-bypass/i.test(body);
+  // Bounded prefix read instead of clone().text(): a multi-MB 403 used to
+  // trigger a full-body buffered read just to throw afterwards. The CF
+  // markers we look for are always in the first <2 KB of the challenge
+  // page; 4 KB is generous headroom. Tradeoff: a CF challenge whose markers
+  // sit past byte 4096 is misclassified as non-CF — acceptable, those don't
+  // exist in the wild.
+  //
+  // We read the response directly (no clone()) because:
+  //   - On match: caller throws away `response` and re-fetches with a new UA
+  //     (so the consumed body doesn't matter).
+  //   - On no-match with status>=400: caller throws without reading body.
+  //   - clone() on a streaming body tees the underlying source; one side
+  //     blocks until the other drains, so cancelling only the clone can
+  //     deadlock when the original is never consumed.
+  const prefix = await readBodyPrefix(response, CF_SNIFF_BYTES);
+  return /just a moment|cf-chl-bypass/i.test(prefix);
 }
 
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {

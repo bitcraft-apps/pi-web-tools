@@ -80,6 +80,16 @@ function pickCharset(
   return undefined;
 }
 
+const MAX_RESPONSE_MB = `${(MAX_RESPONSE_BYTES / 1024 / 1024).toFixed(0)} MB`;
+
+function tooLarge(streamed: boolean): Error {
+  return new Error(
+    streamed
+      ? `Response too large (>${MAX_RESPONSE_MB} streamed, max ${MAX_RESPONSE_MB})`
+      : `Response too large (max ${MAX_RESPONSE_MB})`,
+  );
+}
+
 // Read the response body into an ArrayBuffer, aborting if the running total
 // exceeds MAX_RESPONSE_BYTES. The Content-Length pre-check in fetchAsMarkdown
 // is a fast-path rejection (saves a connection on honest servers); this
@@ -88,37 +98,47 @@ function pickCharset(
 async function readBoundedBody(response: Response): Promise<ArrayBuffer> {
   const reader = response.body?.getReader();
   if (!reader) {
-    // No streaming body (synthetic Response with empty body, etc.).
-    return await response.arrayBuffer();
+    // No streaming body (synthetic Response constructed without a body
+    // stream — e.g. tests, custom transports). undici always exposes a
+    // body stream for network responses, so this branch is not reached in
+    // production, but we still cap it: arrayBuffer() on a synthetic body is
+    // bounded by what the caller already buffered, but we don't trust that.
+    const buf = await response.arrayBuffer();
+    if (buf.byteLength > MAX_RESPONSE_BYTES) throw tooLarge(false);
+    return buf;
   }
-  const chunks: Uint8Array[] = [];
+  // Pre-allocate a single Uint8Array and grow with doubling, so the success
+  // path peaks at ~2× the final size during the last realloc instead of 2×
+  // from a chunks[] + concat copy. Capacity is bounded by MAX_RESPONSE_BYTES.
+  let buf = new Uint8Array(64 * 1024);
   let total = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      total += value.byteLength;
-      if (total > MAX_RESPONSE_BYTES) {
+      const next = total + value.byteLength;
+      if (next > MAX_RESPONSE_BYTES) {
         // Cancel the stream so the underlying connection is released; without
         // this, undici keeps the socket alive trying to drain the rest.
         try { await reader.cancel(); } catch { /* already closed */ }
-        throw new Error(
-          `Response too large (>${(MAX_RESPONSE_BYTES / 1024 / 1024).toFixed(0)} MB streamed, max 5 MB)`,
-        );
+        throw tooLarge(true);
       }
-      chunks.push(value);
+      if (next > buf.byteLength) {
+        let cap = buf.byteLength;
+        while (cap < next) cap *= 2;
+        if (cap > MAX_RESPONSE_BYTES) cap = MAX_RESPONSE_BYTES;
+        const grown = new Uint8Array(cap);
+        grown.set(buf.subarray(0, total));
+        buf = grown;
+      }
+      buf.set(value, total);
+      total = next;
     }
   } finally {
     try { reader.releaseLock(); } catch { /* already released */ }
   }
-  // Concat into a single ArrayBuffer for decodeBody's TextDecoder + meta sniff.
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const c of chunks) {
-    out.set(c, offset);
-    offset += c.byteLength;
-  }
-  return out.buffer;
+  // Hand back a tight slice so decodeBody's TextDecoder doesn't see padding.
+  return buf.buffer.slice(0, total);
 }
 
 async function decodeBody(
@@ -246,7 +266,9 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
 
   const cl = response.headers.get("content-length");
   if (cl && Number(cl) > MAX_RESPONSE_BYTES) {
-    throw new Error(`Response too large (${(Number(cl) / 1024 / 1024).toFixed(1)} MB, max 5 MB)`);
+    throw new Error(
+      `Response too large (${(Number(cl) / 1024 / 1024).toFixed(1)} MB, max ${MAX_RESPONSE_MB})`,
+    );
   }
 
   const contentType = response.headers.get("content-type") ?? "";

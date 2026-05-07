@@ -24,14 +24,44 @@ function parseCharset(contentType: string): string | undefined {
   return m?.[1];
 }
 
-async function decodeBody(response: Response): Promise<string> {
+// Sniff <meta charset="..."> or <meta http-equiv="Content-Type" content="...; charset=...">
+// inside the first ~1024 bytes of an HTML body. Returns undefined if not found.
+function sniffHtmlMetaCharset(buf: ArrayBuffer): string | undefined {
+  const head = new Uint8Array(buf, 0, Math.min(1024, buf.byteLength));
+  // ASCII-decode for scanning; meta declarations are pure ASCII.
+  const text = new TextDecoder("latin1").decode(head);
+  // <meta charset="...">
+  const direct = /<meta[^>]+charset\s*=\s*["']?([A-Za-z0-9_:.\-+]+)/i.exec(text);
+  if (direct) return direct[1];
+  // <meta http-equiv="Content-Type" content="text/html; charset=...">
+  const httpEquiv = /<meta[^>]+http-equiv\s*=\s*["']?content-type["']?[^>]*content\s*=\s*["'][^"']*charset\s*=\s*([A-Za-z0-9_:.\-+]+)/i.exec(text);
+  if (httpEquiv) return httpEquiv[1];
+  return undefined;
+}
+
+function tryDecode(buf: ArrayBuffer, charset: string): string | undefined {
+  try {
+    return new TextDecoder(charset).decode(buf);
+  } catch {
+    return undefined;
+  }
+}
+
+async function decodeBody(
+  response: Response,
+  kind: "html" | "json" | "text",
+): Promise<string> {
   const buf = await response.arrayBuffer();
-  const declared = parseCharset(response.headers.get("content-type") ?? "");
-  if (declared) {
-    try {
-      return new TextDecoder(declared).decode(buf);
-    } catch {
-      // unknown encoding label — fall through to utf-8
+  const httpCharset = parseCharset(response.headers.get("content-type") ?? "");
+  if (httpCharset) {
+    const decoded = tryDecode(buf, httpCharset);
+    if (decoded !== undefined) return decoded;
+    // unknown encoding label — fall through to utf-8
+  } else if (kind === "html") {
+    const metaCharset = sniffHtmlMetaCharset(buf);
+    if (metaCharset) {
+      const decoded = tryDecode(buf, metaCharset);
+      if (decoded !== undefined) return decoded;
     }
   }
   return new TextDecoder("utf-8").decode(buf);
@@ -110,7 +140,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     throw new Error(`Cannot fetch ${ctShort}. Use a tool that supports binary content.`);
   }
 
-  const body = await decodeBody(response);
+  const body = await decodeBody(response, kind);
 
   if (kind === "json") {
     try {

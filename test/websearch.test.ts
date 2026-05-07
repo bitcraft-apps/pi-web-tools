@@ -37,13 +37,37 @@ describe("websearchTool", () => {
   it("default limit is 8 when not provided", async () => {
     (runDdgr as any).mockResolvedValueOnce([]);
     await websearchTool.execute("tc2", { query: "x" }, new AbortController().signal, () => {}, {} as any);
-    expect(runDdgr).toHaveBeenLastCalledWith("x", 8);
+    expect(runDdgr).toHaveBeenLastCalledWith("x", 8, expect.objectContaining({ safesearch: "moderate" }));
   });
 
   it("clamps limit to max 25", async () => {
     (runDdgr as any).mockResolvedValueOnce([]);
     await websearchTool.execute("tc3", { query: "x", limit: 100 }, new AbortController().signal, () => {}, {} as any);
-    expect(runDdgr).toHaveBeenLastCalledWith("x", 25);
+    expect(runDdgr).toHaveBeenLastCalledWith("x", 25, expect.objectContaining({ safesearch: "moderate" }));
+  });
+
+  it("passes region through to runDdgr", async () => {
+    (runDdgr as any).mockResolvedValueOnce([]);
+    await websearchTool.execute(
+      "tc-reg",
+      { query: "pierogi", region: "pl-pl" },
+      new AbortController().signal,
+      () => {},
+      {} as any,
+    );
+    expect(runDdgr).toHaveBeenLastCalledWith("pierogi", 8, { region: "pl-pl", safesearch: "moderate" });
+  });
+
+  it("passes safesearch through to runDdgr", async () => {
+    (runDdgr as any).mockResolvedValueOnce([]);
+    await websearchTool.execute(
+      "tc-ss",
+      { query: "x", safesearch: "off" },
+      new AbortController().signal,
+      () => {},
+      {} as any,
+    );
+    expect(runDdgr).toHaveBeenLastCalledWith("x", 8, expect.objectContaining({ safesearch: "off" }));
   });
 
   it("propagates errors from ddgr", async () => {

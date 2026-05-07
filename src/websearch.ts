@@ -4,6 +4,7 @@ import { runDdgr } from "./lib/ddgr.js";
 
 const LIMIT_DEFAULT = 8;
 const LIMIT_MAX = 25;
+const SAFESEARCH_VALUES = ["off", "moderate", "strict"] as const;
 
 export const websearchTool = defineTool({
   name: "websearch",
@@ -18,10 +19,31 @@ export const websearchTool = defineTool({
         default: LIMIT_DEFAULT,
       }),
     ),
+    region: Type.Optional(
+      Type.String({
+        description:
+          "DuckDuckGo region code, e.g. 'pl-pl', 'us-en', 'de-de'. Default: ddgr's built-in (us-en). Invalid codes silently fall back to ddgr's default.",
+        pattern: "^[a-z]{2}-[a-z]{2}$",
+      }),
+    ),
+    safesearch: Type.Optional(
+      Type.Union(
+        SAFESEARCH_VALUES.map((v) => Type.Literal(v)),
+        {
+          description:
+            "Safe search level. 'off' disables it (passes --unsafe to ddgr). 'moderate' (default) and 'strict' both use ddgr's default safe-search behavior; ddgr does not distinguish them.",
+          default: "moderate",
+        },
+      ),
+    ),
   }),
   async execute(_id, params, _signal, _onUpdate, _ctx) {
     const limit = Math.min(Math.max(1, params.limit ?? LIMIT_DEFAULT), LIMIT_MAX);
-    const results = await runDdgr(params.query, limit);
+    const safesearch = params.safesearch ?? "moderate";
+    const results = await runDdgr(params.query, limit, {
+      region: params.region,
+      safesearch,
+    });
     const payload = { query: params.query, results };
     return {
       content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],

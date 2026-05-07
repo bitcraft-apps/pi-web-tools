@@ -19,6 +19,24 @@ export interface FetchInput {
 
 const HTML_MIMES = ["text/html", "application/xhtml+xml"];
 
+function parseCharset(contentType: string): string | undefined {
+  const m = /;\s*charset\s*=\s*"?([^";\s]+)"?/i.exec(contentType);
+  return m?.[1];
+}
+
+async function decodeBody(response: Response): Promise<string> {
+  const buf = await response.arrayBuffer();
+  const declared = parseCharset(response.headers.get("content-type") ?? "");
+  if (declared) {
+    try {
+      return new TextDecoder(declared).decode(buf);
+    } catch {
+      // unknown encoding label — fall through to utf-8
+    }
+  }
+  return new TextDecoder("utf-8").decode(buf);
+}
+
 function classifyMime(ct: string): "html" | "json" | "text" | "binary" {
   const lower = ct.toLowerCase();
   if (HTML_MIMES.some((m) => lower.startsWith(m))) return "html";
@@ -92,7 +110,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     throw new Error(`Cannot fetch ${ctShort}. Use a tool that supports binary content.`);
   }
 
-  const body = await response.text();
+  const body = await decodeBody(response);
 
   if (kind === "json") {
     try {

@@ -9,12 +9,13 @@ import { fetchAsMarkdown } from "../src/webfetch.js";
 function mockFetchOnce(opts: {
   status?: number;
   headers?: Record<string, string>;
-  body?: string;
+  body?: string | Uint8Array;
 }) {
   const headers = new Headers(opts.headers ?? { "content-type": "text/html; charset=utf-8" });
   const status = opts.status ?? 200;
+  const body = opts.body ?? "<h1>Hi</h1>";
   global.fetch = vi.fn().mockResolvedValueOnce(
-    new Response(opts.body ?? "<h1>Hi</h1>", { status, headers })
+    new Response(body as any, { status, headers })
   ) as any;
 }
 
@@ -85,6 +86,60 @@ describe("fetchAsMarkdown", () => {
       headers: { "content-type": "text/html", "content-length": String(6 * 1024 * 1024) },
     });
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/too large/i);
+  });
+});
+
+describe("charset decoding", () => {
+  // "Łódź" in windows-1250: Ł=0xA3, ó=0xF3, d=0x64, ź=0x9F
+  const POLISH_WIN1250 = new Uint8Array([0xA3, 0xF3, 0x64, 0x9F]);
+  // "Łódź" in iso-8859-2: Ł=0xA3, ó=0xF3, d=0x64, ź=0xBC
+  const POLISH_ISO88592 = new Uint8Array([0xA3, 0xF3, 0x64, 0xBC]);
+
+  it("decodes windows-1250 Polish diacritics correctly", async () => {
+    mockFetchOnce({
+      body: POLISH_WIN1250,
+      headers: { "content-type": "text/plain; charset=windows-1250" },
+    });
+    const out = await fetchAsMarkdown({ url: "https://example.pl/x.txt" });
+    expect(out).toBe("Łódź");
+  });
+
+  it("decodes iso-8859-2 Polish diacritics correctly", async () => {
+    mockFetchOnce({
+      body: POLISH_ISO88592,
+      headers: { "content-type": "text/plain; charset=iso-8859-2" },
+    });
+    const out = await fetchAsMarkdown({ url: "https://example.pl/x.txt" });
+    expect(out).toBe("Łódź");
+  });
+
+  it("is case-insensitive and tolerates whitespace/quotes around charset", async () => {
+    mockFetchOnce({
+      body: POLISH_WIN1250,
+      headers: { "content-type": 'text/plain; charset="WINDOWS-1250"' },
+    });
+    const out = await fetchAsMarkdown({ url: "https://example.pl/x.txt" });
+    expect(out).toBe("Łódź");
+  });
+
+  it("falls back to utf-8 on unknown charset without throwing", async () => {
+    const utf8 = new TextEncoder().encode("hello świat");
+    mockFetchOnce({
+      body: utf8,
+      headers: { "content-type": "text/plain; charset=x-bogus-encoding" },
+    });
+    const out = await fetchAsMarkdown({ url: "https://example.com/x.txt" });
+    expect(out).toBe("hello świat");
+  });
+
+  it("defaults to utf-8 when no charset in content-type", async () => {
+    const utf8 = new TextEncoder().encode("plain ąćę utf8");
+    mockFetchOnce({
+      body: utf8,
+      headers: { "content-type": "text/plain" },
+    });
+    const out = await fetchAsMarkdown({ url: "https://example.com/x.txt" });
+    expect(out).toBe("plain ąćę utf8");
   });
 });
 

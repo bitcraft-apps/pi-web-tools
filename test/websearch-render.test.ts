@@ -8,6 +8,8 @@ import { stubTheme } from "./_helpers/theme.js";
 
 const theme = stubTheme();
 
+const EXPAND_HINT = "Ctrl+E";
+
 const SAMPLE_RESULTS: NonNullable<WebsearchToolDetails["results"]> = [
   { title: "Example", url: "https://example.com", snippet: "first snippet" },
   { title: "Other", url: "https://other.test/path", snippet: "" },
@@ -15,7 +17,6 @@ const SAMPLE_RESULTS: NonNullable<WebsearchToolDetails["results"]> = [
 
 const SAMPLE_DETAILS: WebsearchToolDetails = {
   query: "pierogi",
-  count: 2,
   results: SAMPLE_RESULTS,
 };
 
@@ -52,7 +53,7 @@ describe("formatWebsearchResult", () => {
   it("collapsed view shows count + expand hint", () => {
     expect(
       formatWebsearchResult(
-        { details: SAMPLE_DETAILS, expanded: false, isError: false, expandHint: "Ctrl+E" },
+        { details: SAMPLE_DETAILS, expanded: false, isError: false, expandHint: EXPAND_HINT },
         theme,
       ),
     ).toBe('✓ 2 results for "pierogi" (Ctrl+E)');
@@ -65,7 +66,7 @@ describe("formatWebsearchResult", () => {
           details: { query: "x", count: 1, results: [SAMPLE_RESULTS[0]!] },
           expanded: false,
           isError: false,
-          expandHint: "Ctrl+E",
+          expandHint: EXPAND_HINT,
         },
         theme,
       ),
@@ -74,7 +75,7 @@ describe("formatWebsearchResult", () => {
 
   it("expanded view lists numbered results with title/url/snippet", () => {
     const out = formatWebsearchResult(
-      { details: SAMPLE_DETAILS, expanded: true, isError: false, expandHint: "Ctrl+E" },
+      { details: SAMPLE_DETAILS, expanded: true, isError: false, expandHint: EXPAND_HINT },
       theme,
     );
     expect(out).toBe(
@@ -98,7 +99,7 @@ describe("formatWebsearchResult", () => {
           details: { query: "nada", count: 0, results: [] },
           expanded: false,
           isError: false,
-          expandHint: "Ctrl+E",
+          expandHint: EXPAND_HINT,
         },
         theme,
       ),
@@ -113,7 +114,7 @@ describe("formatWebsearchResult", () => {
           expanded: false,
           isError: true,
           errorText: "ddgr not installed",
-          expandHint: "Ctrl+E",
+          expandHint: EXPAND_HINT,
         },
         theme,
       ),
@@ -123,7 +124,7 @@ describe("formatWebsearchResult", () => {
   it("error path falls back to generic message when errorText is missing", () => {
     expect(
       formatWebsearchResult(
-        { details: undefined, expanded: false, isError: true, expandHint: "Ctrl+E" },
+        { details: undefined, expanded: false, isError: true, expandHint: EXPAND_HINT },
         theme,
       ),
     ).toBe("✗ websearch: error");
@@ -136,7 +137,7 @@ describe("formatWebsearchResult", () => {
           details: { query: "old", count: 3 },
           expanded: true,
           isError: false,
-          expandHint: "Ctrl+E",
+          expandHint: EXPAND_HINT,
         },
         theme,
       ),
@@ -146,7 +147,7 @@ describe("formatWebsearchResult", () => {
   it("missing details entirely treats count as 0", () => {
     expect(
       formatWebsearchResult(
-        { details: undefined, expanded: false, isError: false, expandHint: "Ctrl+E" },
+        { details: undefined, expanded: false, isError: false, expandHint: EXPAND_HINT },
         theme,
       ),
     ).toBe('no results for ""');

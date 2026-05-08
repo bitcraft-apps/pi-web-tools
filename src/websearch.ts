@@ -38,15 +38,20 @@ const websearchSchema = Type.Object({
 
 export interface WebsearchToolDetails {
   query: string;
-  count: number;
   /**
    * Full results array, included so renderResult is pure presentation
    * (no JSON.parse on content[0].text in the redraw path).
    *
    * Optional because sessions persisted before this field was added
-   * deserialize without it; the renderer falls back to header-only.
+   * deserialize without it; the renderer falls back to `count` then to 0.
    */
   results?: DdgrResult[];
+  /**
+   * Legacy field. New sessions derive count from results.length; this is
+   * kept only so old persisted sessions (which had no `results`) still
+   * render the right header.
+   */
+  count?: number;
 }
 
 export interface WebsearchCallArgs {
@@ -73,16 +78,24 @@ export interface ThemeLike {
 export function formatWebsearchCall(args: WebsearchCallArgs | undefined, theme: ThemeLike): string {
   const query = typeof args?.query === "string" ? args.query : "";
   let text = theme.fg("toolTitle", theme.bold("websearch"));
-  text += " " + theme.fg("accent", `"${query}"`);
+  // JSON.stringify handles embedded quotes/control chars; cheaper than a
+  // bespoke escape and behaves on streaming partials.
+  text += " " + theme.fg("accent", JSON.stringify(query));
 
   const extras: string[] = [];
-  if (typeof args?.limit === "number" && args.limit !== LIMIT_DEFAULT) {
+  // All three guards skip empty/zero values too — those only happen on
+  // streaming partials and would otherwise render `limit=0` etc.
+  if (typeof args?.limit === "number" && args.limit > 0 && args.limit !== LIMIT_DEFAULT) {
     extras.push(`limit=${args.limit}`);
   }
   if (typeof args?.region === "string" && args.region.length > 0) {
     extras.push(`region=${args.region}`);
   }
-  if (typeof args?.safesearch === "string" && args.safesearch !== SAFESEARCH_DEFAULT) {
+  if (
+    typeof args?.safesearch === "string" &&
+    args.safesearch.length > 0 &&
+    args.safesearch !== SAFESEARCH_DEFAULT
+  ) {
     extras.push(`safesearch=${args.safesearch}`);
   }
   if (extras.length > 0) {
@@ -114,14 +127,16 @@ export function formatWebsearchResult(input: FormatWebsearchResultInput, theme: 
   }
 
   const query = details?.query ?? "";
-  const count = details?.count ?? 0;
+  // Single source of truth: derive from results when present, fall back to
+  // the legacy `count` field for sessions persisted before `results` existed.
+  const count = details?.results?.length ?? details?.count ?? 0;
 
   if (count === 0) {
-    return theme.fg("warning", `no results for "${query}"`);
+    return theme.fg("warning", `no results for ${JSON.stringify(query)}`);
   }
 
   const noun = count === 1 ? "result" : "results";
-  const header = theme.fg("success", `✓ ${count} ${noun} for "${query}"`);
+  const header = theme.fg("success", `✓ ${count} ${noun} for ${JSON.stringify(query)}`);
 
   if (!expanded) {
     return `${header} (${expandHint})`;
@@ -162,7 +177,6 @@ export const websearchTool = defineTool<typeof websearchSchema, WebsearchToolDet
     });
     const payload = { query: params.query, results };
     const details: WebsearchToolDetails = {
-      count: results.length,
       query: params.query,
       results,
     };
@@ -173,18 +187,16 @@ export const websearchTool = defineTool<typeof websearchSchema, WebsearchToolDet
   },
 
   renderCall(args, theme, context) {
-    // Narrowing Component → Text is the documented row-local component-reuse
-    // pattern for renderCall/renderResult; see
-    // node_modules/@mariozechner/pi-coding-agent/docs/extensions.md.
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-    const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+    // Component reuse per docs/extensions.md, but guarded with instanceof:
+    // if a future change swaps the row's component type we'd otherwise
+    // crash on .setText against an unrelated instance.
+    const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
     text.setText(formatWebsearchCall(args, theme));
     return text;
   },
 
   renderResult(result, options, theme, context) {
-    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- see renderCall above.
-    const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+    const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
     const first = result.content[0];
     const errorText = first && first.type === "text" ? first.text : undefined;
     text.setText(

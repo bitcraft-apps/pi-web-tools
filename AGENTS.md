@@ -69,3 +69,12 @@ Before proposing a new tool, in order:
 no `if hostname === "github.com"` branches, and no autodetection shims like
 "if `gh` is on PATH, reroute github.com URLs through it." The agent picks the
 right CLI for the host; this package provides general primitives only.
+
+## GitHub Actions naming
+
+- **Filename:** kebab-case, lowercase, named after purpose. Tool names are fine when the tool *is* the purpose (e.g. `release-please.yml`, `dependabot.yml`).
+- **Workflow `name:`:** lowercase, kebab-case, mirrors the filename stem.
+- **Job ID** (the YAML key): kebab-case, names the gate (e.g. `typecheck`, `publish-npm`).
+- **Job `name:`:** omit unless it adds info beyond the ID.
+
+Rationale: matches the Conventional Commits + npm script style already used throughout the repo.

@@ -41,6 +41,19 @@ jobs:
       # @typescript/native-preview release lands.
       - run: bun run typecheck
 
+      # Format gate. oxfmt is pre-1.0 (preview channel) — output is NOT
+      # guaranteed stable across versions. Pinned exact in package.json
+      # for that reason. Bump policy:
+      #   - Manual only (Dependabot is github-actions-only in this repo).
+      #   - Expect every bump to produce a reformat-the-world diff. Land
+      #     it in the same PR as the version bump (one commit each).
+      #   - After the bump PR squash-merges, append the squash SHA to
+      #     `.git-blame-ignore-revs` in a follow-up PR (squash-merge
+      #     means the SHA doesn't exist until after merge — see #86 for
+      #     the original instance of this dance).
+      # Tracking issue: #53.
+      - run: bun run format:check
+
       # Cheapest-signal-first: typecheck → lint → test. See #82 for the
       # oxlint + oxlint-tsgolint adoption rationale and pinning notes.
       - run: bun run lint

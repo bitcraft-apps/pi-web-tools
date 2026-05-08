@@ -33,6 +33,7 @@
     "@mariozechner/pi-coding-agent": "*",
     "@types/node": "^20.0.0",
     "@typescript/native-preview": "7.0.0-dev.20260507.1",
+    "oxfmt": "0.48.0",
     "oxlint": "1.63.0",
     "oxlint-tsgolint": "0.22.1",
     "typebox": "*",
@@ -43,7 +44,9 @@
     "test:watch": "vitest",
     "test:network": "RUN_NETWORK_TESTS=1 vitest --run",
     "typecheck": "tsgo --noEmit -p tsconfig.json",
-    "lint": "oxlint --deny-warnings"
+    "lint": "oxlint --deny-warnings",
+    "format": "oxfmt src/ test/ index.ts vitest.config.ts",
+    "format:check": "oxfmt --check src/ test/ index.ts vitest.config.ts"
   },
   "engines": {
     "node": ">=22"

@@ -50,12 +50,11 @@ function sniffHtmlMetaCharset(buf: ArrayBuffer): string | undefined {
   const metaRe = /<meta\b([^>]*)>/gi;
   const attrRe = /([A-Za-z_:][A-Za-z0-9_.:-]*)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>`]+)))?/g;
   for (let tag; (tag = metaRe.exec(text)) !== null; ) {
-    const tagInner = tag[1];
-    if (tagInner === undefined) continue;
+    // Capture group 1 always matches when the outer regex matches; `?? ""` placates noUncheckedIndexedAccess.
+    const tagInner = tag[1] ?? "";
     const attrs: Record<string, string> = {};
     for (let a; (a = attrRe.exec(tagInner)) !== null; ) {
-      const name = a[1];
-      if (name === undefined) continue;
+      const name = a[1] ?? "";
       attrs[name.toLowerCase()] = a[2] ?? a[3] ?? a[4] ?? "";
     }
     if (attrs.charset) return attrs.charset;

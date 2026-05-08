@@ -23,7 +23,7 @@ body:
     id: version
     attributes:
       label: Package version
-      description: Output of `pi list` or the version in your install command.
+      description: Output of `pi list | grep pi-web-tools` (or `bun pm ls @mariozechner/pi-web-tools`), or the version in your install command.
       placeholder: "0.x.y"
     validations:
       required: true
@@ -36,7 +36,7 @@ body:
         Paste the output of this command (skips tools you don't have):
 
         ```
-        uname -srm; bun --version; pi --version 2>/dev/null;
+        uname -srm; bun --version;
         for t in ddgr pandoc w3m trafilatura rdrview; do
           printf '%s: ' "$t"; command -v "$t" >/dev/null && "$t" --version 2>&1 | head -1 || echo "(not installed)";
         done

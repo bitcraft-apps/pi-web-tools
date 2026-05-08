@@ -4,12 +4,12 @@
 
 ## Closes
 
-Closes #
+Closes #<issue>
 <!-- Per AGENTS.md: every PR should reference a pre-existing issue, one PR per issue. PRs without a linked issue may be closed for triage. -->
 
 ## Test plan
 
 - [ ] `bun run test` passes
 - [ ] `bun run typecheck` passes
-- [ ] If touching network code: `bun run test:network` passes
+- [ ] If touching network code: `bun run test:network` ran locally if behavior changed (opt-in via `RUN_NETWORK_TESTS=1`)
 - [ ] Manual verification: <what you ran, if applicable>

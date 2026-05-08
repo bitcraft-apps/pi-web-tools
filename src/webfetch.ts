@@ -1,4 +1,5 @@
 import { validateUrl } from "./lib/url-guard.js";
+import { ssrfAgent } from "./lib/ssrf-agent.js";
 import { htmlToMarkdown } from "./lib/html2md.js";
 import { extractContent } from "./lib/extract.js";
 import {
@@ -190,7 +191,14 @@ async function doFetch(url: URL, userAgent: string): Promise<Response> {
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     redirect: "manual",
     headers: { "User-Agent": userAgent, Accept: ACCEPT_HEADER },
-  });
+    // undici extension: per-request dispatcher. Routes the request through
+    // ssrfAgent's custom DNS lookup, which re-checks the resolved IP against
+    // the SSRF blocklist before the socket opens. Closes the DNS-rebinding
+    // gap that validateUrl (string-only) cannot. See lib/ssrf-agent.ts.
+    // Tests that replace global.fetch wholesale bypass this dispatcher — the
+    // guarantee only holds when undici's real fetch runs.
+    dispatcher: ssrfAgent,
+  } as RequestInit & { dispatcher: unknown });
 }
 
 function isRedirect(status: number): boolean {

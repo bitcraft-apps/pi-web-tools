@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateUrl } from "../src/lib/url-guard.js";
+import { validateUrl, isBlockedAddress } from "../src/lib/url-guard.js";
 
 describe("validateUrl", () => {
   it("accepts valid https URL", () => {
@@ -165,5 +165,53 @@ describe("validateUrl", () => {
   it("treats unparseable hosts as DNS names (passes guard)", () => {
     // We cannot resolve at validation time; DNS rebinding is out of scope.
     expect(() => validateUrl("http://example.internal")).not.toThrow();
+  });
+});
+
+// Issue #64: connect-time IP recheck for DNS rebinding. validateUrl is
+// string-only; isBlockedAddress is the helper the connect hook uses to
+// re-validate the resolved IP before the socket opens.
+describe("isBlockedAddress", () => {
+  it("blocks loopback v4", () => {
+    expect(isBlockedAddress("127.0.0.1", 4)).toBe(true);
+    expect(isBlockedAddress("127.42.0.7", 4)).toBe(true);
+  });
+
+  it("blocks RFC1918 v4", () => {
+    expect(isBlockedAddress("10.0.0.1", 4)).toBe(true);
+    expect(isBlockedAddress("172.16.0.1", 4)).toBe(true);
+    expect(isBlockedAddress("192.168.1.1", 4)).toBe(true);
+  });
+
+  it("blocks AWS IMDS link-local", () => {
+    expect(isBlockedAddress("169.254.169.254", 4)).toBe(true);
+  });
+
+  it("blocks IPv6 loopback and ULA", () => {
+    expect(isBlockedAddress("::1", 6)).toBe(true);
+    expect(isBlockedAddress("fc00::1", 6)).toBe(true);
+    expect(isBlockedAddress("fe80::1", 6)).toBe(true);
+  });
+
+  it("blocks IPv4-mapped IPv6 of a blocked v4", () => {
+    expect(isBlockedAddress("::ffff:127.0.0.1", 6)).toBe(true);
+    expect(isBlockedAddress("::ffff:169.254.169.254", 6)).toBe(true);
+  });
+
+  it("infers family from address shape when omitted", () => {
+    expect(isBlockedAddress("127.0.0.1")).toBe(true);
+    expect(isBlockedAddress("::1")).toBe(true);
+  });
+
+  it("passes public addresses", () => {
+    expect(isBlockedAddress("1.1.1.1", 4)).toBe(false);
+    expect(isBlockedAddress("8.8.8.8", 4)).toBe(false);
+    expect(isBlockedAddress("2606:4700:4700::1111", 6)).toBe(false);
+  });
+
+  it("returns false for unparseable inputs (caller handles)", () => {
+    // dns.lookup never returns garbage like this in practice; documented
+    // tradeoff is to fall through rather than throw.
+    expect(isBlockedAddress("not-an-ip")).toBe(false);
   });
 });

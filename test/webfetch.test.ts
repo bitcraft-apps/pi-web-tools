@@ -740,6 +740,109 @@ describe("redirect re-validation (issue #57)", () => {
   });
 });
 
+// Drill through the TypeError("fetch failed") wrapper undici puts around
+// connect-time errors. We don't want to assert on the wrapper string;
+// we want to assert the EBLOCKED our lookup hook produced.
+function blockedCause(err: unknown): string {
+  let cur: unknown = err;
+  for (let i = 0; i < 5 && cur; i++) {
+    if (cur instanceof Error && cur.message.includes("Blocked host")) return cur.message;
+    cur = (cur as { cause?: unknown })?.cause;
+  }
+  return String(err);
+}
+
+describe("DNS-rebinding guard (issue #64)", () => {
+  // These tests do NOT mock global.fetch — we need the real undici fetch to
+  // run so it goes through ssrfAgent's lookup hook. dns.lookup is stubbed so
+  // no actual network traffic happens (the lookup fails with EBLOCKED before
+  // any TCP connect is attempted).
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  function stubDns(address: string, family: 4 | 6) {
+    return vi.spyOn(dns, "lookup").mockImplementation(((
+      _hostname: string,
+      options: any,
+      callback: any,
+    ) => {
+      const cb = typeof options === "function" ? options : callback;
+      const opts = typeof options === "function" ? {} : options;
+      if (opts && opts.all) {
+        cb(null, [{ address, family }]);
+      } else {
+        cb(null, address, family);
+      }
+    }) as unknown as typeof dns.lookup);
+  }
+
+  it("blocks a public name whose A record points at loopback", async () => {
+    // Public-looking hostname that passes validateUrl, then resolves to
+    // 127.0.0.1 — classic DNS rebinding. Without the connect-time recheck,
+    // this would hit whatever was on localhost.
+    stubDns("127.0.0.1", 4);
+    const err = await fetchAsMarkdown({ url: "http://rebind.example" }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(err).not.toBeNull();
+    expect(blockedCause(err)).toMatch(/Blocked host.*127\.0\.0\.1/);
+  });
+
+  it("blocks a public name whose A record points at AWS IMDS", async () => {
+    stubDns("169.254.169.254", 4);
+    const err = await fetchAsMarkdown({ url: "http://metadata.example" }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(blockedCause(err)).toMatch(/169\.254\.169\.254/);
+  });
+
+  it("blocks a public name whose AAAA record points at IPv6 loopback", async () => {
+    stubDns("::1", 6);
+    const err = await fetchAsMarkdown({ url: "http://rebind6.example" }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(blockedCause(err)).toMatch(/Blocked host.*::1/);
+  });
+
+  it("blocks a redirect target whose hostname rebinds to private", async () => {
+    // Two-stage attack: hop 1 is mocked at the global.fetch level (so we
+    // don't depend on a real public server existing); hop 2 is a public
+    // name that DNS-resolves to RFC1918. The redirect URL passes
+    // validateUrl (string looks public), but the connect-time lookup must
+    // reject it.
+    stubDns("10.0.0.1", 4);
+    let calls = 0;
+    global.fetch = ((url: any, init: any) => {
+      calls++;
+      if (calls === 1) {
+        return Promise.resolve(
+          new Response("", {
+            status: 302,
+            headers: new Headers({ location: "http://rebound.example/x" }),
+          }),
+        );
+      }
+      // Hand off to real undici fetch for hop 2 so ssrfAgent.lookup runs.
+      return originalFetch(url, init);
+    }) as typeof fetch;
+
+    const err = await fetchAsMarkdown({ url: "https://example.com" }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(blockedCause(err)).toMatch(/Blocked host.*10\.0\.0\.1/);
+    expect(calls).toBe(2);
+  });
+});
+
+import dns from "node:dns";
+
 describe("webfetchTool", () => {
   it("has correct shape", () => {
     expect(webfetchTool.name).toBe("webfetch");

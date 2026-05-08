@@ -28,6 +28,9 @@
     "@mariozechner/pi-ai": "*",
     "typebox": "*"
   },
+  "dependencies": {
+    "undici": "^7.0.0"
+  },
   "devDependencies": {
     "@mariozechner/pi-ai": "*",
     "@mariozechner/pi-coding-agent": "*",

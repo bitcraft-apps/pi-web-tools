@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import dns from "node:dns";
 import { Agent } from "undici";
 import { __setSsrfAgentForTesting, lookupHook } from "../src/lib/ssrf-agent.js";
+import { stubExtensionContext } from "./_helpers/context.js";
+import { mockDnsLookup } from "./_helpers/dns.js";
 
 vi.mock("../src/lib/html2md.js", () => ({
   htmlToMarkdown: vi.fn(async (html: string) => `MD:${html.slice(0, 20)}`),
@@ -26,9 +27,16 @@ function mockFetchOnce(opts: {
   const headers = new Headers(opts.headers ?? { "content-type": "text/html; charset=utf-8" });
   const status = opts.status ?? 200;
   const body = opts.body ?? "<h1>Hi</h1>";
-  global.fetch = vi
-    .fn()
-    .mockResolvedValueOnce(new Response(body as any, { status, headers })) as any;
+  // Re-wrap any Uint8Array into a fresh `Uint8Array<ArrayBuffer>` so it lines
+  // up with `BodyInit`. With recent @types/node + lib.dom, the default
+  // `Uint8Array` type widens to `Uint8Array<ArrayBufferLike>` (allowing
+  // SharedArrayBuffer), which `BodyInit` rejects. The copy is cheap and
+  // semantically identical for these tests.
+  const responseBody: BodyInit = typeof body === "string" ? body : new Uint8Array(body);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValueOnce(new Response(responseBody, { status, headers })),
+  );
 }
 
 beforeEach(() => {
@@ -36,8 +44,12 @@ beforeEach(() => {
   // clearAllMocks doesn't drain mockResolvedValueOnce queues. Reset and
   // re-establish the default null so leftover queued values from one test
   // can't leak into the next.
-  (extractContent as any).mockReset();
-  (extractContent as any).mockResolvedValue(null);
+  vi.mocked(extractContent).mockReset();
+  vi.mocked(extractContent).mockResolvedValue(null);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("fetchAsMarkdown", () => {
@@ -140,27 +152,33 @@ describe("fetchAsMarkdown", () => {
     });
 
   it("rejects response > 5MB when Content-Length is missing (chunked)", async () => {
-    global.fetch = vi.fn().mockResolvedValueOnce(
-      new Response(makeOversizeStream(), {
-        status: 200,
-        headers: new Headers({ "content-type": "text/html" }),
-      }),
-    ) as any;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(makeOversizeStream(), {
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+        }),
+      ),
+    );
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/too large/i);
   });
 
   it("rejects response > 5MB when Content-Length lies (says 1 KB, sends >5 MB)", async () => {
-    global.fetch = vi.fn().mockResolvedValueOnce(
-      new Response(makeOversizeStream(), {
-        status: 200,
-        headers: new Headers({
-          "content-type": "text/html",
-          // Lying — says 1 KB.
-          "content-length": "1024",
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(makeOversizeStream(), {
+          status: 200,
+          headers: new Headers({
+            "content-type": "text/html",
+            // Lying — says 1 KB.
+            "content-length": "1024",
+          }),
         }),
-      }),
-    ) as any;
+      ),
+    );
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/too large/i);
   });
@@ -173,12 +191,15 @@ describe("fetchAsMarkdown", () => {
         controller.close();
       },
     });
-    global.fetch = vi.fn().mockResolvedValueOnce(
-      new Response(stream, {
-        status: 200,
-        headers: new Headers({ "content-type": "text/plain" }),
-      }),
-    ) as any;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(stream, {
+          status: 200,
+          headers: new Headers({ "content-type": "text/plain" }),
+        }),
+      ),
+    );
 
     const out = await fetchAsMarkdown({ url: "https://example.com" });
     // text/plain path: full 4 MB body streamed through, then truncated to
@@ -197,7 +218,7 @@ describe("content extraction wire-in", () => {
     // Extracted must be ≥ 1% of body or the suspicion-fallback discards it.
     const article = "<article>" + "a".repeat(500) + "</article>"; // ~520 chars
     const fullHtml = "<html><nav>chrome</nav>" + article + "x".repeat(20_000) + "</html>";
-    (extractContent as any).mockResolvedValueOnce(article);
+    vi.mocked(extractContent).mockResolvedValueOnce(article);
     mockFetchOnce({ body: fullHtml });
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(extractContent).toHaveBeenCalledWith(
@@ -208,7 +229,7 @@ describe("content extraction wire-in", () => {
   });
 
   it("falls back to full HTML when extractor returns null", async () => {
-    (extractContent as any).mockResolvedValueOnce(null);
+    vi.mocked(extractContent).mockResolvedValueOnce(null);
     const fullHtml = "<html><nav>x</nav><p>body</p></html>";
     mockFetchOnce({ body: fullHtml });
     await fetchAsMarkdown({ url: "https://example.com" });
@@ -218,7 +239,7 @@ describe("content extraction wire-in", () => {
   it("falls back to full HTML when extracted < 1% of original AND original > 10 KB", async () => {
     // Original > 10 KB, extracted way under 1%: triggers the suspicion fallback.
     const fullHtml = "<html>" + "x".repeat(20_000) + "</html>";
-    (extractContent as any).mockResolvedValueOnce("<p>tiny</p>");
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
     mockFetchOnce({ body: fullHtml });
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(htmlToMarkdown).toHaveBeenCalledWith(fullHtml);
@@ -229,7 +250,7 @@ describe("content extraction wire-in", () => {
     // guard (0 >= 1% of 20 KB) is what saves us. Regression test for the
     // "successful extractor returning literally '' triggers fallback" case.
     const fullHtml = "<html>" + "x".repeat(20_000) + "</html>";
-    (extractContent as any).mockResolvedValueOnce("");
+    vi.mocked(extractContent).mockResolvedValueOnce("");
     mockFetchOnce({ body: fullHtml });
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(htmlToMarkdown).toHaveBeenCalledWith(fullHtml);
@@ -250,7 +271,7 @@ describe("content extraction wire-in", () => {
     // Original > 10 KB, extracted is ~5% of it: ratio guard does not fire.
     const fullHtml = "<html>" + "x".repeat(20_000) + "</html>";
     const extracted = "<article>" + "y".repeat(1_500) + "</article>"; // > 1% of 20 KB
-    (extractContent as any).mockResolvedValueOnce(extracted);
+    vi.mocked(extractContent).mockResolvedValueOnce(extracted);
     mockFetchOnce({ body: fullHtml });
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(htmlToMarkdown).toHaveBeenCalledWith(extracted);
@@ -342,9 +363,8 @@ describe("HTML meta charset sniffing", () => {
     buildHtml(`<meta http-equiv="Content-Type" content="text/html; charset=${charset}">`);
 
   function lastHtmlPassedToMd(): string {
-    const mock = vi.mocked(htmlToMarkdown);
-    const calls = mock.mock.calls;
-    return calls[calls.length - 1]?.[0] as string;
+    const calls = vi.mocked(htmlToMarkdown).mock.calls;
+    return calls[calls.length - 1]?.[0] ?? "";
   }
 
   it("honors <meta charset> when HTTP content-type omits charset", async () => {
@@ -462,7 +482,7 @@ describe("Cloudflare retry hack", () => {
         new Response("<html>blocked</html>", { status: 200, headers: cfHeaders }),
       )
       .mockResolvedValueOnce(new Response("<h1>OK</h1>", { status: 200, headers: okHeaders }));
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     const md = await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(2);
@@ -479,7 +499,7 @@ describe("Cloudflare retry hack", () => {
         new Response("<html>Just a moment...</html>", { status: 403, headers }),
       )
       .mockResolvedValueOnce(new Response("<h1>OK</h1>", { status: 200, headers }));
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(2);
@@ -490,7 +510,7 @@ describe("Cloudflare retry hack", () => {
     const mock = vi
       .fn()
       .mockResolvedValue(new Response("<html>blocked</html>", { status: 200, headers: cfHeaders }));
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
       /JS|cannot fetch/i,
@@ -516,7 +536,7 @@ describe("Cloudflare retry hack", () => {
           headers: new Headers({ "content-type": "text/html" }),
         }),
       );
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(2);
@@ -532,7 +552,7 @@ describe("Cloudflare retry hack", () => {
         headers: new Headers({ "content-type": "text/html" }),
       }),
     );
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     // Falls through to the regular 403 throw path — no retry attempted.
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
@@ -546,7 +566,7 @@ describe("Cloudflare retry hack", () => {
         headers: new Headers({ "content-type": "text/html" }),
       }),
     );
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
     expect(mock).toHaveBeenCalledTimes(1);
@@ -569,7 +589,7 @@ describe("Cloudflare retry hack", () => {
           headers: new Headers({ "content-type": "text/html" }),
         }),
       );
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(2);
@@ -589,7 +609,7 @@ describe("Cloudflare retry hack", () => {
       .mockResolvedValueOnce(
         new Response(html, { status: 403, headers: new Headers({ "content-type": "text/html" }) }),
       );
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
     expect(mock).toHaveBeenCalledTimes(1);
@@ -614,12 +634,15 @@ describe("Cloudflare retry hack", () => {
         enqueued++;
       },
     });
-    global.fetch = vi.fn().mockResolvedValueOnce(
-      new Response(stream, {
-        status: 403,
-        headers: new Headers({ "content-type": "text/html" }),
-      }),
-    ) as any;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(stream, {
+          status: 403,
+          headers: new Headers({ "content-type": "text/html" }),
+        }),
+      ),
+    );
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
     // Sniff window is 4 KB; one 256 KB chunk satisfies it. Anything close to
@@ -636,12 +659,8 @@ function redirectResponse(location: string, status = 302): Response {
 }
 
 describe("redirect re-validation (issue #57)", () => {
-  // Restore global.fetch after each test in this block so a test that throws
-  // mid-setup can't leak its mock into the next describe.
-  const originalFetch = global.fetch;
-  afterEach(() => {
-    global.fetch = originalFetch;
-  });
+  // Per-test fetch stubs are restored by the top-level `vi.unstubAllGlobals()`
+  // afterEach; no per-describe save/restore needed.
 
   it("follows a redirect that stays on a public host", async () => {
     const mock = vi
@@ -653,7 +672,7 @@ describe("redirect re-validation (issue #57)", () => {
           headers: new Headers({ "content-type": "text/html" }),
         }),
       );
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     const md = await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(2);
@@ -662,7 +681,7 @@ describe("redirect re-validation (issue #57)", () => {
 
   it("throws when 302 points at loopback", async () => {
     const mock = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1/admin"));
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
     expect(mock).toHaveBeenCalledTimes(1);
@@ -672,7 +691,7 @@ describe("redirect re-validation (issue #57)", () => {
     const mock = vi
       .fn()
       .mockResolvedValueOnce(redirectResponse("http://169.254.169.254/latest/meta-data/"));
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
   });
@@ -684,7 +703,7 @@ describe("redirect re-validation (issue #57)", () => {
 
   it("throws when 302 points at localhost by name", async () => {
     const mock = vi.fn().mockResolvedValueOnce(redirectResponse("http://localhost:3000/admin"));
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
   });
@@ -702,7 +721,7 @@ describe("redirect re-validation (issue #57)", () => {
           headers: new Headers({ "content-type": "text/html" }),
         }),
       );
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     await fetchAsMarkdown({ url: "https://example.com/page" });
     expect(mock).toHaveBeenCalledTimes(2);
@@ -719,7 +738,7 @@ describe("redirect re-validation (issue #57)", () => {
       // swap these for sub-labels of example.com (which IS reserved).
       return redirectResponse(`https://example${i++}.com/`);
     });
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
       /too many redirects/i,
@@ -736,7 +755,7 @@ describe("redirect re-validation (issue #57)", () => {
         headers: new Headers({ "content-type": "text/html" }),
       }),
     );
-    global.fetch = mock as any;
+    vi.stubGlobal("fetch", mock);
 
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(1);
@@ -787,34 +806,32 @@ describe("DNS-rebinding guard (issue #64)", () => {
   // silently dropped, dns.lookup would still get called by undici's default
   // connector, the request would still fail (because we stub dns to a blocked
   // address), but `hookSpy` would have zero calls. See ssrf-agent.ts header.
+  // Saved before any test mocks `global.fetch`. Used by the rebind-redirect
+  // test below to forward hop 2 to the real undici fetch (so ssrfAgent's
+  // lookup hook actually runs and we exercise the connect-time recheck).
+  // The top-level `vi.unstubAllGlobals()` afterEach restores `global.fetch`
+  // between tests, so we don't need a second per-describe restore.
   const originalFetch = global.fetch;
-  let hookSpy: ReturnType<typeof vi.fn>;
+  let hookSpy: ReturnType<typeof vi.fn<typeof lookupHook>>;
   beforeEach(() => {
-    hookSpy = vi.fn(lookupHook);
-    __setSsrfAgentForTesting(
-      new Agent({ connect: { lookup: hookSpy as unknown as typeof lookupHook } }),
-    );
+    hookSpy = vi.fn<typeof lookupHook>(lookupHook);
+    __setSsrfAgentForTesting(new Agent({ connect: { lookup: hookSpy } }));
   });
   afterEach(() => {
-    global.fetch = originalFetch;
     __setSsrfAgentForTesting(null);
     vi.restoreAllMocks();
   });
 
   function stubDns(address: string, family: 4 | 6) {
-    return vi.spyOn(dns, "lookup").mockImplementation(((
-      _hostname: string,
-      options: any,
-      callback: any,
-    ) => {
-      const cb = typeof options === "function" ? options : callback;
-      const opts = typeof options === "function" ? {} : options;
-      if (opts && opts.all) {
+    return mockDnsLookup((_hostname, optionsOrCallback, maybeCallback) => {
+      const cb = typeof optionsOrCallback === "function" ? optionsOrCallback : maybeCallback!;
+      const opts = typeof optionsOrCallback === "function" ? {} : optionsOrCallback;
+      if (opts.all) {
         cb(null, [{ address, family }]);
       } else {
         cb(null, address, family);
       }
-    }) as unknown as typeof dns.lookup);
+    });
   }
 
   it("blocks a public name whose A record points at loopback", async () => {
@@ -859,7 +876,10 @@ describe("DNS-rebinding guard (issue #64)", () => {
     // reject it.
     stubDns("10.0.0.1", 4);
     let calls = 0;
-    global.fetch = ((url: any, init: any) => {
+    vi.stubGlobal("fetch", ((
+      url: Parameters<typeof fetch>[0],
+      init?: Parameters<typeof fetch>[1],
+    ) => {
       calls++;
       if (calls === 1) {
         return Promise.resolve(
@@ -871,7 +891,7 @@ describe("DNS-rebinding guard (issue #64)", () => {
       }
       // Hand off to real undici fetch for hop 2 so ssrfAgent.lookup runs.
       return originalFetch(url, init);
-    }) as typeof fetch;
+    }) satisfies typeof fetch);
 
     const err = await fetchAsMarkdown({ url: "https://example.com" }).then(
       () => null,
@@ -904,7 +924,7 @@ describe("webfetchTool", () => {
       { url: "https://example.com" },
       new AbortController().signal,
       () => {},
-      {} as any,
+      stubExtensionContext(),
     );
     expect(result.content[0]!.type).toBe("text");
     const textContent = result.content[0]!;

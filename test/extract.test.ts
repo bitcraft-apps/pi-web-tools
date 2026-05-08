@@ -60,14 +60,14 @@ import { detectExtractor, extractContent, __resetExtractorCache } from "../src/l
 let warnSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
-  (spawn as any).mockReset();
+  vi.mocked(spawn).mockReset();
   __resetExtractorCache();
   warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
 describe("detectExtractor", () => {
   it("prefers trafilatura when both are present", async () => {
-    (spawn as any).mockImplementation((cmd: string, args: string[]) => {
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
       if (cmd === "which" && args[0] === "trafilatura")
         return fakeChild("/usr/bin/trafilatura\n", 0);
       if (cmd === "which" && args[0] === "rdrview") return fakeChild("/usr/bin/rdrview\n", 0);
@@ -75,12 +75,12 @@ describe("detectExtractor", () => {
     });
     expect(await detectExtractor()).toBe("trafilatura");
     // rdrview should not have been probed (short-circuit on first hit)
-    const whichCalls = (spawn as any).mock.calls.filter((c: any[]) => c[0] === "which");
+    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "which");
     expect(whichCalls.map((c: any[]) => c[1][0])).toEqual(["trafilatura"]);
   });
 
   it("falls back to rdrview when trafilatura is missing", async () => {
-    (spawn as any).mockImplementation((cmd: string, args: string[]) => {
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
       if (cmd === "which" && args[0] === "trafilatura") return fakeChild("", 1);
       if (cmd === "which" && args[0] === "rdrview") return fakeChild("/usr/bin/rdrview\n", 0);
       return fakeChild("", 1);
@@ -89,12 +89,12 @@ describe("detectExtractor", () => {
   });
 
   it("returns null when neither is installed", async () => {
-    (spawn as any).mockImplementation(() => fakeChild("", 1));
+    vi.mocked(spawn).mockImplementation(() => fakeChild("", 1));
     expect(await detectExtractor()).toBeNull();
   });
 
   it("memoizes detection across calls (which probed at most once per binary)", async () => {
-    (spawn as any).mockImplementation((cmd: string, args: string[]) => {
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
       if (cmd === "which" && args[0] === "trafilatura")
         return fakeChild("/usr/bin/trafilatura\n", 0);
       return fakeChild("", 1);
@@ -102,38 +102,38 @@ describe("detectExtractor", () => {
     await detectExtractor();
     await detectExtractor();
     await detectExtractor();
-    const whichCalls = (spawn as any).mock.calls.filter((c: any[]) => c[0] === "which");
+    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "which");
     expect(whichCalls).toHaveLength(1);
   });
 
   it("single-flights concurrent first calls", async () => {
-    (spawn as any).mockImplementation((cmd: string, args: string[]) => {
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
       if (cmd === "which" && args[0] === "trafilatura")
         return fakeChild("/usr/bin/trafilatura\n", 0);
       return fakeChild("", 1);
     });
     await Promise.all([detectExtractor(), detectExtractor(), detectExtractor()]);
-    const whichCalls = (spawn as any).mock.calls.filter((c: any[]) => c[0] === "which");
+    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "which");
     expect(whichCalls).toHaveLength(1);
   });
 });
 
 describe("extractContent", () => {
   it("invokes trafilatura with --html --no-comments and returns its stdout", async () => {
-    (spawn as any).mockImplementation((cmd: string, args: string[]) => {
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
       if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
       if (cmd === "trafilatura") return fakeChild("<article>clean</article>", 0);
       return fakeChild("", 1);
     });
     const out = await extractContent("<html>...</html>", "https://example.com/a");
     expect(out).toBe("<article>clean</article>");
-    const trafCall = (spawn as any).mock.calls.find((c: any[]) => c[0] === "trafilatura");
+    const trafCall = vi.mocked(spawn).mock.calls.find((c) => c[0] === "trafilatura");
     expect(trafCall).toBeTruthy();
-    expect(trafCall[1]).toEqual(["--html", "--no-comments"]);
+    expect(trafCall![1]).toEqual(["--html", "--no-comments"]);
   });
 
   it("invokes rdrview with -H -u <url> and platform-conditional --disable-sandbox", async () => {
-    (spawn as any).mockImplementation((cmd: string, args: string[]) => {
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
       if (cmd === "which" && args[0] === "trafilatura") return fakeChild("", 1);
       if (cmd === "which" && args[0] === "rdrview") return fakeChild("/x\n", 0);
       if (cmd === "rdrview") return fakeChild("<article>r</article>", 0);
@@ -141,18 +141,18 @@ describe("extractContent", () => {
     });
     const out = await extractContent("<html>x</html>", "https://example.com/a");
     expect(out).toBe("<article>r</article>");
-    const rdrCall = (spawn as any).mock.calls.find((c: any[]) => c[0] === "rdrview");
+    const rdrCall = vi.mocked(spawn).mock.calls.find((c) => c[0] === "rdrview");
     expect(rdrCall).toBeTruthy();
-    expect(rdrCall[1].slice(0, 3)).toEqual(["-H", "-u", "https://example.com/a"]);
+    expect(rdrCall![1].slice(0, 3)).toEqual(["-H", "-u", "https://example.com/a"]);
     if (process.platform === "darwin") {
-      expect(rdrCall[1]).toContain("--disable-sandbox");
+      expect(rdrCall![1]).toContain("--disable-sandbox");
     } else {
-      expect(rdrCall[1]).not.toContain("--disable-sandbox");
+      expect(rdrCall![1]).not.toContain("--disable-sandbox");
     }
   });
 
   it("returns null (does not throw) when extractor exits non-zero", async () => {
-    (spawn as any).mockImplementation((cmd: string, args: string[]) => {
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
       if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
       if (cmd === "trafilatura") return fakeChild("", 2, "boom");
       return fakeChild("", 1);
@@ -161,7 +161,7 @@ describe("extractContent", () => {
   });
 
   it("returns null and emits a one-shot stderr warning when no extractor present", async () => {
-    (spawn as any).mockImplementation(() => fakeChild("", 1));
+    vi.mocked(spawn).mockImplementation(() => fakeChild("", 1));
     expect(await extractContent("<html>x</html>", "https://example.com")).toBeNull();
     expect(await extractContent("<html>y</html>", "https://example.com")).toBeNull();
     expect(await extractContent("<html>z</html>", "https://example.com")).toBeNull();
@@ -170,7 +170,7 @@ describe("extractContent", () => {
   });
 
   it("does not warn when an extractor is present", async () => {
-    (spawn as any).mockImplementation((cmd: string, args: string[]) => {
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
       if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
       if (cmd === "trafilatura") return fakeChild("<p>ok</p>", 0);
       return fakeChild("", 1);
@@ -180,7 +180,7 @@ describe("extractContent", () => {
   });
 
   it("survives extractor that closes before stdin.end() (EPIPE on write)", async () => {
-    (spawn as any).mockImplementation((cmd: string, args: string[]) => {
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
       if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
       if (cmd === "trafilatura") return fakeChildEpipeOnStdin(2);
       return fakeChild("", 1);
@@ -193,7 +193,7 @@ describe("extractContent", () => {
   });
 
   it("emits a one-shot stderr warning on first extractor failure", async () => {
-    (spawn as any).mockImplementation((cmd: string, args: string[]) => {
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
       if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
       if (cmd === "trafilatura") return fakeChild("", 2, "boom");
       return fakeChild("", 1);

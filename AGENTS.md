@@ -78,5 +78,3 @@ right CLI for the host; this package provides general primitives only.
 - **Job `name:`:** omit unless it adds info beyond the ID. It adds info when the ID alone is ambiguous, e.g. matrix legs: `name: node ${{ matrix.node }}`.
 
 Rationale: the workflow/job ID is what appears in PR required-status-check config and failure notifications, so it must match the filename and be greppable.
-
-Existing workflows that predate this rule (notably `pr-title.yml`) will be aligned in #94.

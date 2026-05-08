@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { initTheme, keyHint } from "@mariozechner/pi-coding-agent";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   formatWebsearchCall,
   formatWebsearchResult,
@@ -151,5 +152,34 @@ describe("formatWebsearchResult", () => {
         theme,
       ),
     ).toBe('no results for ""');
+  });
+});
+
+// The collapsed-view tests above feed `formatWebsearchResult` a fake
+// `expandHint` so they never depend on the real keybinding registry.
+// That's correct for the formatter contract, but it leaves the live
+// `keyHint("app.tools.expand", ...)` call site in `websearch.ts`
+// completely untested — if pi-coding-agent removed/renamed `keyHint`,
+// or changed its signature, our renderer would crash at runtime and
+// these tests would still pass.
+//
+// This case keeps the live call honest. Note: it does NOT catch a
+// rename of the binding *id* itself ("app.tools.expand" → something
+// else), because that would require deep-importing the binding
+// registry from pi-coding-agent's internals (`core/keybindings.js`),
+// which we don't want to couple to. A binding-id rename surfaces as
+// an empty key prefix ("  to expand"), not a thrown error.
+describe("keyHint integration", () => {
+  beforeAll(() => {
+    // keyHint() resolves theme colors via the global theme singleton,
+    // which throws if uninitialized. We don't care about the actual
+    // theme — just that the call itself doesn't blow up.
+    initTheme();
+  });
+
+  it("the real keyHint accepts the expand binding and includes the description", () => {
+    const hint = keyHint("app.tools.expand", "to expand");
+    expect(typeof hint).toBe("string");
+    expect(hint).toContain("to expand");
   });
 });

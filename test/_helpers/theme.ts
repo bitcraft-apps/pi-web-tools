@@ -4,18 +4,19 @@
 // the strings to come through verbatim so tests stay readable and don't
 // depend on the active theme.
 //
-// `theme.fg(color, text) -> text` and `theme.bold(text) -> text` is the
-// minimum surface the formatters touch. Centralizing the assertion here
-// keeps `as unknown as Theme` casts out of every test file.
+// Typed as `Pick<Theme, "fg" | "bold">` so the stub stays in lockstep
+// with the real Theme surface the formatters touch — including the
+// `ThemeColor` union for `fg`'s color param. Centralizing the cast here
+// keeps `as unknown as Theme` out of every test file.
 
-import type { ThemeLike } from "../../src/websearch.js";
+import type { Theme, ThemeColor } from "@mariozechner/pi-coding-agent";
 
-export function stubTheme(): ThemeLike {
+export function stubTheme(): Pick<Theme, "fg" | "bold"> {
   return {
-    fg(_color, text) {
+    fg(_color: ThemeColor, text: string) {
       return text;
     },
-    bold(text) {
+    bold(text: string) {
       return text;
     },
   };

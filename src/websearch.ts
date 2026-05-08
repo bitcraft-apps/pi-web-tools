@@ -1,8 +1,42 @@
 import { Type } from "@mariozechner/pi-ai";
-import { defineTool, keyHint } from "@mariozechner/pi-coding-agent";
+import { defineTool, keyHint, type Theme } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import type { DdgrResult, SafeSearch } from "./lib/ddgr.js";
 import { runDdgr } from "./lib/ddgr.js";
+
+// Minimal slice of the pi-coding-agent Theme that the pure formatters
+// touch. Pick (rather than a hand-rolled interface) keeps `fg`'s color
+// param typed as the real ThemeColor union — typos like
+// theme.fg("accnet", ...) are caught at compile time instead of silently
+// producing the wrong output. Type-only import → zero runtime cost.
+type FormatterTheme = Pick<Theme, "fg" | "bold">;
+
+/**
+ * Used as a cheap quote+escape (handles embedded quotes/control chars
+ * and stays sane on streaming partials), not as JSON encoding.
+ */
+function quote(s: string): string {
+  return JSON.stringify(s);
+}
+
+/**
+ * Reuses the previously-mounted Text component when possible, otherwise
+ * mints a fresh one. The (0, 0) padding mirrors the convention from
+ * pi-coding-agent's built-in `read`/`write` tool renderers — tool rows
+ * sit flush in the chat container, the host adds outer padding.
+ *
+ * The instanceof guard matters because pi-tui is declared as a peerDep
+ * with version `"*"`. If a consumer ends up with two physical copies of
+ * pi-tui in node_modules, `context.lastComponent` may be a `Text` from
+ * the *other* copy — different class identity, different prototype.
+ * Without the guard, .setText() would either crash or write to a stale
+ * instance the host then discards. With the guard, we degrade to
+ * "always new Text" — the renderer keeps working, only the per-redraw
+ * reuse optimization is lost.
+ */
+function ensureText(lastComponent: unknown): Text {
+  return lastComponent instanceof Text ? lastComponent : new Text("", 0, 0);
+}
 
 const LIMIT_DEFAULT = 8;
 const LIMIT_MAX = 25;
@@ -47,9 +81,11 @@ export interface WebsearchToolDetails {
    */
   results?: DdgrResult[];
   /**
-   * Legacy field. New sessions derive count from results.length; this is
-   * kept only so old persisted sessions (which had no `results`) still
-   * render the right header.
+   * @deprecated since 1.x — see #109. Legacy field. New sessions derive
+   * count from results.length; this is kept only so old persisted
+   * sessions (which had no `results`) still render the right header.
+   * Removal is tracked in the linked issue and is non-breaking — the
+   * field is renderer-internal and not part of the public API.
    */
   count?: number;
 }
@@ -62,25 +98,16 @@ export interface WebsearchCallArgs {
 }
 
 /**
- * Minimal Theme surface used by the pure formatters. The real Theme class
- * from @mariozechner/pi-coding-agent satisfies this structurally; tests
- * pass a no-op stub so they never depend on real ANSI output.
- */
-export interface ThemeLike {
-  fg(color: string, text: string): string;
-  bold(text: string): string;
-}
-
-/**
  * Pure formatter for the websearch tool call header. Keeps non-default
  * args muted so default invocations stay compact.
  */
-export function formatWebsearchCall(args: WebsearchCallArgs | undefined, theme: ThemeLike): string {
+export function formatWebsearchCall(
+  args: WebsearchCallArgs | undefined,
+  theme: FormatterTheme,
+): string {
   const query = typeof args?.query === "string" ? args.query : "";
   let text = theme.fg("toolTitle", theme.bold("websearch"));
-  // JSON.stringify handles embedded quotes/control chars; cheaper than a
-  // bespoke escape and behaves on streaming partials.
-  text += " " + theme.fg("accent", JSON.stringify(query));
+  text += " " + theme.fg("accent", quote(query));
 
   const extras: string[] = [];
   // All three guards skip empty/zero values too — those only happen on
@@ -118,7 +145,10 @@ export interface FormatWebsearchResultInput {
  * Pure formatter for the websearch tool result. See issue #99 for the
  * collapsed/expanded/empty/error spec.
  */
-export function formatWebsearchResult(input: FormatWebsearchResultInput, theme: ThemeLike): string {
+export function formatWebsearchResult(
+  input: FormatWebsearchResultInput,
+  theme: FormatterTheme,
+): string {
   const { details, expanded, isError, errorText, expandHint } = input;
 
   if (isError) {
@@ -132,11 +162,11 @@ export function formatWebsearchResult(input: FormatWebsearchResultInput, theme: 
   const count = details?.results?.length ?? details?.count ?? 0;
 
   if (count === 0) {
-    return theme.fg("warning", `no results for ${JSON.stringify(query)}`);
+    return theme.fg("warning", `no results for ${quote(query)}`);
   }
 
   const noun = count === 1 ? "result" : "results";
-  const header = theme.fg("success", `✓ ${count} ${noun} for ${JSON.stringify(query)}`);
+  const header = theme.fg("success", `✓ ${count} ${noun} for ${quote(query)}`);
 
   if (!expanded) {
     return `${header} (${expandHint})`;
@@ -187,16 +217,13 @@ export const websearchTool = defineTool<typeof websearchSchema, WebsearchToolDet
   },
 
   renderCall(args, theme, context) {
-    // Component reuse per docs/extensions.md, but guarded with instanceof:
-    // if a future change swaps the row's component type we'd otherwise
-    // crash on .setText against an unrelated instance.
-    const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
+    const text = ensureText(context.lastComponent);
     text.setText(formatWebsearchCall(args, theme));
     return text;
   },
 
   renderResult(result, options, theme, context) {
-    const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
+    const text = ensureText(context.lastComponent);
     const first = result.content[0];
     const errorText = first && first.type === "text" ? first.text : undefined;
     text.setText(

@@ -1,4 +1,4 @@
-name: test
+name: ci
 
 on:
   pull_request:
@@ -9,12 +9,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: test-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: vitest (bun)
+  checks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

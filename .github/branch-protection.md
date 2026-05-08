@@ -14,7 +14,7 @@ change to those settings.
 The following check names must pass before a PR can be merged. They are
 copy-pasted verbatim from the GitHub branch-protection UI:
 
-- `vitest (bun)` — produced by `.github/workflows/test.yml`
+- `ci / checks` — produced by `.github/workflows/ci.yml`
 - `Lint PR title (Conventional Commits)` — produced by `.github/workflows/pr-title.yml`
 
 ## ⚠️ Renaming a job breaks the required-check binding

@@ -1,28 +1,23 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import dns from "node:dns";
 import { ssrfLookup } from "../src/lib/ssrf-agent.js";
+import { mockDnsLookup } from "./_helpers/dns.js";
 
 // Stub dns.lookup so we can deterministically inject "rebinding" answers
 // without actually hitting a resolver.
 function stubLookup(answer: { address: string; family: 4 | 6 } | Error) {
-  return (
-    vi
-      .spyOn(dns, "lookup")
-      // The dns.lookup overloads are messy; tests don't care about types.
-      .mockImplementation(((hostname: string, options: any, callback: any) => {
-        const cb = typeof options === "function" ? options : callback;
-        const opts = typeof options === "function" ? {} : options;
-        if (answer instanceof Error) {
-          cb(answer, "", 0);
-          return;
-        }
-        if (opts && opts.all) {
-          cb(null, [{ address: answer.address, family: answer.family }]);
-        } else {
-          cb(null, answer.address, answer.family);
-        }
-      }) as unknown as typeof dns.lookup)
-  );
+  return mockDnsLookup((_hostname, optionsOrCallback, maybeCallback) => {
+    const cb = typeof optionsOrCallback === "function" ? optionsOrCallback : maybeCallback!;
+    const opts = typeof optionsOrCallback === "function" ? {} : optionsOrCallback;
+    if (answer instanceof Error) {
+      cb(answer, "", 0);
+      return;
+    }
+    if (opts.all) {
+      cb(null, [{ address: answer.address, family: answer.family }]);
+    } else {
+      cb(null, answer.address, answer.family);
+    }
+  });
 }
 
 describe("ssrfLookup", () => {
@@ -67,7 +62,14 @@ describe("ssrfLookup", () => {
   it("passes through public v4 answer", async () => {
     stubLookup({ address: "1.1.1.1", family: 4 });
     const result = await new Promise<{ a?: string; f?: number; e: unknown }>((resolve) => {
-      ssrfLookup("public.example", {}, (e, a, f) => resolve({ e, a: a as string, f }));
+      ssrfLookup("public.example", {}, (e, a, f) => {
+        // a is `string | LookupAddress[]` per the dns typings; ssrfLookup
+        // forwards the underlying v4 single-address answer unchanged. We
+        // narrow with a runtime check rather than asserting on a type the
+        // callee may legitimately widen in the future.
+        const addr = typeof a === "string" ? a : undefined;
+        resolve({ e, a: addr, f });
+      });
     });
     expect(result.e).toBeNull();
     expect(result.a).toBe("1.1.1.1");
@@ -78,13 +80,13 @@ describe("ssrfLookup", () => {
     // Real-world DNS-rebinder trick: return one public + one private to defeat
     // a "first answer wins" guard. net.connect may try the list in order and
     // fall back to the private one on connect failure.
-    vi.spyOn(dns, "lookup").mockImplementation(((_h: string, _o: any, cb: any) => {
-      const callback = typeof _o === "function" ? _o : cb;
+    mockDnsLookup((_h, optionsOrCallback, maybeCallback) => {
+      const callback = typeof optionsOrCallback === "function" ? optionsOrCallback : maybeCallback!;
       callback(null, [
         { address: "1.1.1.1", family: 4 },
         { address: "127.0.0.1", family: 4 },
       ]);
-    }) as unknown as typeof dns.lookup);
+    });
 
     const err = await new Promise<NodeJS.ErrnoException | null>((resolve) => {
       ssrfLookup("mixed.example", { all: true }, (e) => resolve(e));

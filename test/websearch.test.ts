@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { stubExtensionContext } from "./_helpers/context.js";
 
 vi.mock("../src/lib/ddgr.js", () => ({
   runDdgr: vi.fn(),
@@ -6,6 +7,21 @@ vi.mock("../src/lib/ddgr.js", () => ({
 
 import { websearchTool } from "../src/websearch.js";
 import { runDdgr } from "../src/lib/ddgr.js";
+
+// Module-scoped on purpose: the Proxy is stateless (every property read
+// throws), so sharing it across tests is safe and avoids per-test
+// allocation. If a future test needs to mutate per-case expectations,
+// inline `stubExtensionContext()` at that call site instead of mutating
+// this shared instance.
+const stubCtx = stubExtensionContext();
+
+function textOf(content: { type: string; text?: string }[]): string {
+  const first = content[0]!;
+  if (first.type !== "text" || typeof first.text !== "string") {
+    throw new Error(`expected text content, got ${first.type}`);
+  }
+  return first.text;
+}
 
 describe("websearchTool", () => {
   it("has correct shape", () => {
@@ -15,7 +31,7 @@ describe("websearchTool", () => {
   });
 
   it("returns JSON content with results from ddgr", async () => {
-    (runDdgr as any).mockResolvedValueOnce([
+    vi.mocked(runDdgr).mockResolvedValueOnce([
       { title: "Example", url: "https://example.com", snippet: "snip" },
     ]);
     const result = await websearchTool.execute(
@@ -23,25 +39,24 @@ describe("websearchTool", () => {
       { query: "test", limit: 8 },
       new AbortController().signal,
       () => {},
-      {} as any,
+      stubCtx,
     );
     expect(result.content).toHaveLength(1);
     expect(result.content[0]!.type).toBe("text");
-    const textContent = result.content[0]! as any;
-    const parsed = JSON.parse(textContent.text);
+    const parsed = JSON.parse(textOf(result.content));
     expect(parsed.query).toBe("test");
     expect(parsed.results).toHaveLength(1);
     expect(parsed.results[0].url).toBe("https://example.com");
   });
 
   it("default limit is 8 when not provided", async () => {
-    (runDdgr as any).mockResolvedValueOnce([]);
+    vi.mocked(runDdgr).mockResolvedValueOnce([]);
     await websearchTool.execute(
       "tc2",
       { query: "x" },
       new AbortController().signal,
       () => {},
-      {} as any,
+      stubCtx,
     );
     expect(runDdgr).toHaveBeenLastCalledWith(
       "x",
@@ -51,13 +66,13 @@ describe("websearchTool", () => {
   });
 
   it("clamps limit to max 25", async () => {
-    (runDdgr as any).mockResolvedValueOnce([]);
+    vi.mocked(runDdgr).mockResolvedValueOnce([]);
     await websearchTool.execute(
       "tc3",
       { query: "x", limit: 100 },
       new AbortController().signal,
       () => {},
-      {} as any,
+      stubCtx,
     );
     expect(runDdgr).toHaveBeenLastCalledWith(
       "x",
@@ -67,13 +82,13 @@ describe("websearchTool", () => {
   });
 
   it("passes region through to runDdgr", async () => {
-    (runDdgr as any).mockResolvedValueOnce([]);
+    vi.mocked(runDdgr).mockResolvedValueOnce([]);
     await websearchTool.execute(
       "tc-reg",
       { query: "pierogi", region: "pl-pl" },
       new AbortController().signal,
       () => {},
-      {} as any,
+      stubCtx,
     );
     expect(runDdgr).toHaveBeenLastCalledWith("pierogi", 8, {
       region: "pl-pl",
@@ -82,13 +97,13 @@ describe("websearchTool", () => {
   });
 
   it("passes safesearch through to runDdgr", async () => {
-    (runDdgr as any).mockResolvedValueOnce([]);
+    vi.mocked(runDdgr).mockResolvedValueOnce([]);
     await websearchTool.execute(
       "tc-ss",
       { query: "x", safesearch: "off" },
       new AbortController().signal,
       () => {},
-      {} as any,
+      stubCtx,
     );
     expect(runDdgr).toHaveBeenLastCalledWith(
       "x",
@@ -98,30 +113,25 @@ describe("websearchTool", () => {
   });
 
   it("propagates errors from ddgr", async () => {
-    (runDdgr as any).mockRejectedValueOnce(new Error("ddgr not installed. Run: brew install ddgr"));
+    vi.mocked(runDdgr).mockRejectedValueOnce(
+      new Error("ddgr not installed. Run: brew install ddgr"),
+    );
     await expect(
-      websearchTool.execute(
-        "tc4",
-        { query: "x" },
-        new AbortController().signal,
-        () => {},
-        {} as any,
-      ),
+      websearchTool.execute("tc4", { query: "x" }, new AbortController().signal, () => {}, stubCtx),
     ).rejects.toThrow(/ddgr not installed/);
   });
 
   it("empty results return empty array, not error", async () => {
-    (runDdgr as any).mockResolvedValueOnce([]);
+    vi.mocked(runDdgr).mockResolvedValueOnce([]);
     const result = await websearchTool.execute(
       "tc5",
       { query: "x" },
       new AbortController().signal,
       () => {},
-      {} as any,
+      stubCtx,
     );
     expect(result.content).toHaveLength(1);
-    const textContent = result.content[0]! as any;
-    const parsed = JSON.parse(textContent.text);
+    const parsed = JSON.parse(textOf(result.content));
     expect(parsed.results).toEqual([]);
   });
 });

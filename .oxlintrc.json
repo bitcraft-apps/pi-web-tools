@@ -26,13 +26,7 @@
       // Must mirror the top-level `plugins` list + `vitest`. Oxlint overrides
       // replace (don't merge) the array; if you add a plugin above, add it here too.
       "plugins": ["typescript", "unicorn", "oxc", "import", "node", "promise", "vitest"],
-      "rules": {
-        // Disabled pending #84. Vitest mock fixtures use `(spawn as any)`,
-        // `{} as any`, `mock as any` etc. throughout. These are legitimate
-        // mock plumbing, not real `as any` footguns; tightening requires a
-        // test-wide refactor to `vi.mocked(...)` typing. Re-enable in #84.
-        "typescript/no-unsafe-type-assertion": "off"
-      }
+      "rules": {}
     }
   ]
 }

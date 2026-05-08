@@ -42,7 +42,7 @@
     "test:network": "RUN_NETWORK_TESTS=1 vitest --run"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "repository": {
     "type": "git",

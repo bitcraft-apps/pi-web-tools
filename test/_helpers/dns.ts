@@ -16,9 +16,17 @@ type DnsLookupCallback = (
   family?: number,
 ) => void;
 
+// Note: the `lookup(hostname, family, callback)` shorthand overload
+// (where `family` is a bare `0 | 4 | 6`) is intentionally omitted from
+// this union. No test currently exercises it, and adding `| number` to
+// the second arg would force every `impl` to discriminate
+// `typeof optionsOrCallback === "number"` before reading `.all` /
+// `.family` off the options object — paying a real ergonomic cost in
+// every call site for a code path none of them take. Add it (and the
+// discriminator) only when a test actually needs it.
 export type DnsLookupImpl = (
   hostname: string,
-  optionsOrFamilyOrCallback: dns.LookupOptions | number | DnsLookupCallback,
+  optionsOrCallback: dns.LookupOptions | DnsLookupCallback,
   maybeCallback?: DnsLookupCallback,
 ) => void;
 

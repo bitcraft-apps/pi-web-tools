@@ -96,6 +96,8 @@ cd pi-web-tools
 bun install
 bun run typecheck           # type-check via tsgo (@typescript/native-preview); CI runs this before tests
 bun run lint                # oxlint + type-aware oxlint-tsgolint; CI runs this before tests
+bun run format              # apply oxfmt to src/, test/, index.ts, vitest.config.ts
+bun run format:check        # CI runs this before lint; fails if anything is unformatted
 bun run test                # unit tests, no network
 bun run test:network        # integration tests (requires net)
 ```

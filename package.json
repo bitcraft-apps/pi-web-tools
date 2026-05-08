@@ -29,7 +29,7 @@
     "typebox": "*"
   },
   "dependencies": {
-    "undici": "^7.0.0"
+    "undici": "^6.0.0 || ^7.0.0"
   },
   "devDependencies": {
     "@mariozechner/pi-ai": "*",

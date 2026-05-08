@@ -294,6 +294,12 @@ export function validateUrl(input: string): URL {
 // dns.lookup never produces garbage in practice, so reaching the fall-through
 // means a bug or a malicious caller, and fail-closed is the safer default for
 // a security helper.
+//
+// IMPORTANT: this is effectively `isBlockedOrUnparseable` — an input that is
+// neither a valid IPv4 nor a valid IPv6 literal returns `true` (BLOCKED), not
+// `false`. Do NOT reuse this for non-DNS-result input (e.g. user-supplied
+// hostnames) without understanding that fail-closed semantics. For a literal
+// like "not-an-ip", `isBlockedAddress("not-an-ip") === true`.
 export function isBlockedAddress(address: string, family?: number): boolean {
   const looksV6 = family === 6 || address.includes(":");
   if (looksV6) {

@@ -1,4 +1,4 @@
-import type { Dispatcher } from "undici";
+import type { RequestInit as UndiciRequestInit } from "undici";
 import { validateUrl } from "./lib/url-guard.js";
 import { getSsrfAgent } from "./lib/ssrf-agent.js";
 import { htmlToMarkdown } from "./lib/html2md.js";
@@ -188,18 +188,21 @@ const MAX_REDIRECTS = 5;
 // Single-hop fetch — does NOT follow redirects. Caller is responsible for
 // re-validating Location targets and looping. See fetchWithRedirects.
 async function doFetch(url: URL, userAgent: string): Promise<Response> {
-  return fetch(url, {
+  // Typed against undici's own RequestInit (which declares `dispatcher`) so a
+  // future undici rename of the field surfaces as a type error here instead
+  // of a silent runtime no-op. See lib/ssrf-agent.ts for why this dispatcher
+  // exists. Tests that replace global.fetch wholesale bypass this dispatcher
+  // — the SSRF re-check guarantee only holds when undici's real fetch runs.
+  const init = {
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    redirect: "manual",
+    redirect: "manual" as const,
     headers: { "User-Agent": userAgent, Accept: ACCEPT_HEADER },
-    // undici extension: per-request dispatcher. Routes the request through
-    // ssrfAgent's custom DNS lookup, which re-checks the resolved IP against
-    // the SSRF blocklist before the socket opens. Closes the DNS-rebinding
-    // gap that validateUrl (string-only) cannot. See lib/ssrf-agent.ts.
-    // Tests that replace global.fetch wholesale bypass this dispatcher — the
-    // guarantee only holds when undici's real fetch runs.
     dispatcher: getSsrfAgent(),
-  } as RequestInit & { dispatcher: Dispatcher });
+  } satisfies UndiciRequestInit;
+  // global fetch's lib.dom RequestInit type doesn't know about `dispatcher`,
+  // so the assignment is from a wider literal to a narrower DOM type. The
+  // extra `dispatcher` property is a runtime-honored undici extension.
+  return fetch(url, init);
 }
 
 function isRedirect(status: number): boolean {

@@ -34,15 +34,17 @@
 // (unit tests stub `dns.lookup`, so they pass even if undici is bypassed).
 //
 // We support `engines.node >= 22`. Node 22 LTS bundles undici 6.x and Node
-// 24 bundles undici 7.x; we cannot pin a single major that matches both.
+// 24 bundles undici 7.x; we cannot pin a single major that matches both, so
+// `dependencies.undici` is set to `^6.0.0 || ^7.0.0` — npm will resolve to
+// the major closest to the host Node, minimizing the symbol-identity risk.
 // Mitigations:
-//   - Keep the user-installed undici major in sync with the host Node's
-//     bundled major when possible.
-//   - When adding an integration test that exercises real `fetch`, include
-//     a positive assertion that `lookupHook` was invoked (proves the
-//     dispatcher made it through). See test/ssrf-agent.test.ts for the
-//     direct ssrfLookup tests; an end-to-end fetch test belongs in a
-//     network-gated suite (see `test:network`).
+//   - Range-pin spans both supported Node majors (above) so `npm install`
+//     picks a compatible undici without manual intervention.
+//   - The end-to-end test in test/webfetch.test.ts wraps `lookupHook` in a
+//     `vi.fn()` and asserts `toHaveBeenCalled()` on every rebinding case.
+//     If a future undici/Node combo silently drops the `dispatcher:` option,
+//     that assertion fails (default connector wouldn't go through our hook),
+//     surfacing the bypass instead of letting it ship.
 //   - Track upstream undici / Node interop changes; revisit if Node exposes
 //     a stable public API for connect-time DNS hooks.
 
@@ -100,24 +102,34 @@ export function ssrfLookup(
       );
       return;
     }
-    if (typeof address === "string" && isBlockedAddress(address, family)) {
+    if (typeof address !== "string") {
+      // dns.lookup contract: when `all` is false the address is always a
+      // string. Anything else means a resolver bug or a malicious shim —
+      // fail closed rather than coerce an unknown value through to net.connect.
+      cb(blockedError(hostname, String(address)), "", 0);
+      return;
+    }
+    if (isBlockedAddress(address, family)) {
       cb(blockedError(hostname, address), "", 0);
       return;
     }
     // dns.lookup on success always returns family 4 or 6. Anything else is a
-    // contract violation by the resolver — fail closed rather than coerce a
-    // bogus value through to net.connect.
+    // contract violation by the resolver — fail closed rather than pass a
+    // bogus family through to net.connect.
     if (family !== 4 && family !== 6) {
-      cb(blockedError(hostname, address as string), "", 0);
+      cb(blockedError(hostname, address), "", 0);
       return;
     }
-    cb(null, address as string, family);
+    cb(null, address, family);
   });
 }
 
 // Match net.LookupFunction shape so undici/net call us with a single concrete
 // signature; we then forward into ssrfLookup which uses the same type.
-const lookupHook: net.LookupFunction = (hostname, options, callback) => {
+// Exported so tests can wrap it in a `vi.fn()` and assert the dispatcher
+// actually routed traffic through us (proves Node's bundled fetch did not
+// silently drop the `dispatcher:` option — see dual-copy note above).
+export const lookupHook: net.LookupFunction = (hostname, options, callback) => {
   ssrfLookup(hostname, options, callback);
 };
 
@@ -126,6 +138,12 @@ const lookupHook: net.LookupFunction = (hostname, options, callback) => {
 // from a non-fetching context (typecheck-only consumers, doc generators)
 // free of side effects. Once created, the dispatcher is reused across calls
 // so connection pooling still works.
+//
+// We deliberately never call `cachedAgent.close()`. The pool lives for the
+// lifetime of the process; for a CLI tool / short-lived agent loop that's
+// the correct trade-off (closing on every fetch would defeat keep-alive).
+// If this module is ever reused in a long-lived daemon with bounded host
+// sets, revisit and add an explicit shutdown hook.
 let cachedAgent: Agent | null = null;
 export function getSsrfAgent(): Agent {
   cachedAgent ??= new Agent({
@@ -134,4 +152,11 @@ export function getSsrfAgent(): Agent {
     },
   });
   return cachedAgent;
+}
+
+// Test-only seam. Lets a test install an Agent built around a `vi.fn()`-
+// wrapped lookup hook so it can assert the dispatcher path was honored.
+// Not part of the public API; do not call from production code.
+export function __setSsrfAgentForTesting(agent: Agent | null): void {
+  cachedAgent = agent;
 }

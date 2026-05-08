@@ -1,0 +1,42 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import", "node", "promise"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "off",
+    "style": "off",
+    "pedantic": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  "options": {
+    "typeAware": true
+  },
+  "rules": {
+    // Test-only reset hooks. The `__` prefix is a deliberate convention
+    // marking these as not part of the public API; see the JSDoc on each.
+    "eslint/no-underscore-dangle": [
+      "error",
+      { "allow": ["__resetExtractorCache", "__resetConverterCache"] }
+    ],
+    // Disabled pending #83. Without `tsconfig.noUncheckedIndexedAccess`,
+    // the 24 `arr[i]!` markers in src/lib/url-guard.ts read as redundant.
+    // Enabling that tsconfig flag (in #83) makes them necessary AND surfaces
+    // 13 real missing-null-check sites elsewhere. Re-enable this rule there.
+    "typescript/no-unnecessary-type-assertion": "off"
+  },
+  "overrides": [
+    {
+      "files": ["test/**"],
+      "plugins": ["typescript", "unicorn", "oxc", "import", "node", "promise", "vitest"],
+      "rules": {
+        // Disabled pending #84. Vitest mock fixtures use `(spawn as any)`,
+        // `{} as any`, `mock as any` etc. throughout. These are legitimate
+        // mock plumbing, not real `as any` footguns; tightening requires a
+        // test-wide refactor to `vi.mocked(...)` typing. Re-enable in #84.
+        "typescript/no-unsafe-type-assertion": "off"
+      }
+    }
+  ]
+}

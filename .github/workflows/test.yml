@@ -41,4 +41,14 @@ jobs:
       # @typescript/native-preview release lands.
       - run: bun run typecheck
 
+      # Lint between typecheck and test: type errors are the cheapest signal,
+      # lint is the next-cheapest, vitest is heaviest. Type-aware oxlint via
+      # oxlint-tsgolint (Go binary using typescript-go, same engine family as
+      # the @typescript/native-preview pinned above per #50). Both oxlint and
+      # oxlint-tsgolint are exact-pinned in package.json. --deny-warnings
+      # ensures any rule we ever set to "warn" still fails CI; current config
+      # uses "error" exclusively, so this is forward-looking insurance.
+      # Adoption rationale: see #82 (overrides #52).
+      - run: bun run lint
+
       - run: bun run test

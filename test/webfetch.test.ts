@@ -597,6 +597,10 @@ describe("Cloudflare retry hack", () => {
 
 import { webfetchTool } from "../src/webfetch.js";
 
+function redirectResponse(location: string, status = 302): Response {
+  return new Response("", { status, headers: new Headers({ location }) });
+}
+
 describe("redirect re-validation (issue #57)", () => {
   // Restore global.fetch after each test in this block so a test that throws
   // mid-setup can't leak its mock into the next describe.
@@ -604,10 +608,6 @@ describe("redirect re-validation (issue #57)", () => {
   afterEach(() => {
     global.fetch = originalFetch;
   });
-
-  function redirectResponse(location: string, status = 302): Response {
-    return new Response("", { status, headers: new Headers({ location }) });
-  }
 
   it("follows a redirect that stays on a public host", async () => {
     const mock = vi.fn()

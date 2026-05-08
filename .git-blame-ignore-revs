@@ -1,0 +1,5 @@
+# SHAs listed here are excluded from `git blame` output.
+# Enable locally with: git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# chore(ci): adopt oxfmt as the project formatter (#87)
+35b7f45efd68c30249158f8abd8a11758866255c

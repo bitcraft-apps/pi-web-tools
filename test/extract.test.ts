@@ -166,7 +166,7 @@ describe("extractContent", () => {
     expect(await extractContent("<html>y</html>", "https://example.com")).toBeNull();
     expect(await extractContent("<html>z</html>", "https://example.com")).toBeNull();
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0][0]).toMatch(/pipx install trafilatura/);
+    expect(warnSpy.mock.calls[0]![0]).toMatch(/pipx install trafilatura/);
   });
 
   it("does not warn when an extractor is present", async () => {
@@ -202,6 +202,6 @@ describe("extractContent", () => {
     expect(await extractContent("<html>y</html>", "https://example.com")).toBeNull();
     expect(await extractContent("<html>z</html>", "https://example.com")).toBeNull();
     expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(warnSpy.mock.calls[0][0]).toMatch(/Extractor "trafilatura" failed/);
+    expect(warnSpy.mock.calls[0]![0]).toMatch(/Extractor "trafilatura" failed/);
   });
 });

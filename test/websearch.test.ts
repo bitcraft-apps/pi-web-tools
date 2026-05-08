@@ -26,8 +26,8 @@ describe("websearchTool", () => {
       {} as any,
     );
     expect(result.content).toHaveLength(1);
-    expect(result.content[0].type).toBe("text");
-    const textContent = result.content[0] as any;
+    expect(result.content[0]!.type).toBe("text");
+    const textContent = result.content[0]! as any;
     const parsed = JSON.parse(textContent.text);
     expect(parsed.query).toBe("test");
     expect(parsed.results).toHaveLength(1);
@@ -119,7 +119,8 @@ describe("websearchTool", () => {
       () => {},
       {} as any,
     );
-    const textContent = result.content[0] as any;
+    expect(result.content).toHaveLength(1);
+    const textContent = result.content[0]! as any;
     const parsed = JSON.parse(textContent.text);
     expect(parsed.results).toEqual([]);
   });

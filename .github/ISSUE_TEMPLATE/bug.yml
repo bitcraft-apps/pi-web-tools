@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in websearch or webfetch is broken
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what did you get?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro
+      description: Exact command, query, or URL. Minimal example preferred.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: Output of `pi list | grep pi-web-tools` (or `bun pm ls @mariozechner/pi-web-tools`), or the version in your install command.
+      placeholder: "0.x.y"
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: |
+        Paste the output of this command (skips tools you don't have):
+
+        ```
+        uname -srm; bun --version;
+        for t in ddgr pandoc w3m trafilatura rdrview; do
+          printf '%s: ' "$t"; command -v "$t" >/dev/null && "$t" --version 2>&1 | head -1 || echo "(not installed)";
+        done
+        ```
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: Optional. Any error output, stack traces, or unexpected tool results.
+      render: shell

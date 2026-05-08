@@ -466,7 +466,7 @@ describe("Cloudflare retry hack", () => {
 
     const md = await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(2);
-    const secondCall = mock.mock.calls[1][1];
+    const secondCall = mock.mock.calls[1]![1];
     expect(secondCall.headers["User-Agent"]).toBe("opencode");
     expect(md).toContain("MD:");
   });
@@ -706,7 +706,7 @@ describe("redirect re-validation (issue #57)", () => {
 
     await fetchAsMarkdown({ url: "https://example.com/page" });
     expect(mock).toHaveBeenCalledTimes(2);
-    expect(mock.mock.calls[1][0].toString()).toBe("https://example.com/landing");
+    expect(mock.mock.calls[1]![0].toString()).toBe("https://example.com/landing");
   });
 
   it("caps redirect chain at MAX_REDIRECTS", async () => {
@@ -906,8 +906,8 @@ describe("webfetchTool", () => {
       () => {},
       {} as any,
     );
-    expect(result.content[0].type).toBe("text");
-    const textContent = result.content[0];
+    expect(result.content[0]!.type).toBe("text");
+    const textContent = result.content[0]!;
     if (textContent.type === "text") {
       expect(textContent.text).toContain("MD:");
     }

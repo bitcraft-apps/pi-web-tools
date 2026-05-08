@@ -16,7 +16,7 @@ describe("parseOutput", () => {
     const long = "x".repeat(500);
     const stdout = JSON.stringify([{ title: "T", url: "https://e.example", abstract: long }]);
     const out = parseOutput(stdout, 8);
-    expect(out[0].snippet).toHaveLength(240);
+    expect(out[0]!.snippet).toHaveLength(240);
   });
 
   it("returns empty array for empty stdout", () => {
@@ -36,7 +36,7 @@ describe("parseOutput", () => {
 
   it("missing abstract becomes empty snippet", () => {
     const stdout = JSON.stringify([{ title: "T", url: "https://e.example" }]);
-    expect(parseOutput(stdout, 8)[0].snippet).toBe("");
+    expect(parseOutput(stdout, 8)[0]!.snippet).toBe("");
   });
 
   it("throws on invalid JSON", () => {

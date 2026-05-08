@@ -119,6 +119,7 @@ describe("websearchTool", () => {
       () => {},
       {} as any,
     );
+    expect(result.content).toHaveLength(1);
     const textContent = result.content[0]! as any;
     const parsed = JSON.parse(textContent.text);
     expect(parsed.results).toEqual([]);

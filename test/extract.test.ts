@@ -14,7 +14,11 @@ function fakeChild(stdoutText: string, exitCode = 0, stderrText = "") {
   // Buffers (matches real `spawn` behavior with no setEncoding call).
   ee.stdout = Readable.from([Buffer.from(stdoutText, "utf-8")]);
   ee.stderr = Readable.from([Buffer.from(stderrText, "utf-8")]);
-  ee.stdin = new Writable({ write(_c, _e, cb) { cb(); } });
+  ee.stdin = new Writable({
+    write(_c, _e, cb) {
+      cb();
+    },
+  });
   ee.kill = () => {};
   // Emit "close" *after* stdout drains, so the implementation's data handlers
   // have populated stdoutChunks before close fires. Without this we relied on
@@ -51,11 +55,7 @@ function fakeChildEpipeOnStdin(exitCode = 1) {
   return ee;
 }
 
-import {
-  detectExtractor,
-  extractContent,
-  __resetExtractorCache,
-} from "../src/lib/extract.js";
+import { detectExtractor, extractContent, __resetExtractorCache } from "../src/lib/extract.js";
 
 let warnSpy: ReturnType<typeof vi.spyOn>;
 
@@ -68,7 +68,8 @@ beforeEach(() => {
 describe("detectExtractor", () => {
   it("prefers trafilatura when both are present", async () => {
     (spawn as any).mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/usr/bin/trafilatura\n", 0);
+      if (cmd === "which" && args[0] === "trafilatura")
+        return fakeChild("/usr/bin/trafilatura\n", 0);
       if (cmd === "which" && args[0] === "rdrview") return fakeChild("/usr/bin/rdrview\n", 0);
       return fakeChild("", 1);
     });
@@ -94,7 +95,8 @@ describe("detectExtractor", () => {
 
   it("memoizes detection across calls (which probed at most once per binary)", async () => {
     (spawn as any).mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/usr/bin/trafilatura\n", 0);
+      if (cmd === "which" && args[0] === "trafilatura")
+        return fakeChild("/usr/bin/trafilatura\n", 0);
       return fakeChild("", 1);
     });
     await detectExtractor();
@@ -106,7 +108,8 @@ describe("detectExtractor", () => {
 
   it("single-flights concurrent first calls", async () => {
     (spawn as any).mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/usr/bin/trafilatura\n", 0);
+      if (cmd === "which" && args[0] === "trafilatura")
+        return fakeChild("/usr/bin/trafilatura\n", 0);
       return fakeChild("", 1);
     });
     await Promise.all([detectExtractor(), detectExtractor(), detectExtractor()]);

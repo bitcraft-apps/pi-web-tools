@@ -55,16 +55,16 @@ export async function runDdgr(
   return new Promise((resolve, reject) => {
     let child;
     try {
-      child = spawn(
-        "ddgr",
-        buildDdgrArgs(query, limit, opts),
-        { stdio: ["ignore", "pipe", "pipe"] }
-      );
+      child = spawn("ddgr", buildDdgrArgs(query, limit, opts), {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
     } catch (e: any) {
       if (e.code === "ENOENT") {
-        return reject(new Error(
-          "ddgr not installed. Run: brew install ddgr (mac) / pip install ddgr / apt install ddgr"
-        ));
+        return reject(
+          new Error(
+            "ddgr not installed. Run: brew install ddgr (mac) / pip install ddgr / apt install ddgr",
+          ),
+        );
       }
       return reject(e);
     }
@@ -84,9 +84,11 @@ export async function runDdgr(
     child.on("error", (err: any) => {
       clearTimeout(timer);
       if (err.code === "ENOENT") {
-        return reject(new Error(
-          "ddgr not installed. Run: brew install ddgr (mac) / pip install ddgr / apt install ddgr"
-        ));
+        return reject(
+          new Error(
+            "ddgr not installed. Run: brew install ddgr (mac) / pip install ddgr / apt install ddgr",
+          ),
+        );
       }
       reject(err);
     });
@@ -94,14 +96,18 @@ export async function runDdgr(
     child.on("close", (code) => {
       clearTimeout(timer);
       if (timedOut) {
-        return reject(new Error(
-          "DuckDuckGo timed out (likely rate-limited). Try again in a minute or use webfetch with a known URL."
-        ));
+        return reject(
+          new Error(
+            "DuckDuckGo timed out (likely rate-limited). Try again in a minute or use webfetch with a known URL.",
+          ),
+        );
       }
       const stdout = Buffer.concat(stdoutChunks).toString("utf-8").trim();
       if (!stdout) {
         const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
-        return reject(new Error(`ddgr produced no output (exit ${code}): ${stderr || "(empty stderr)"}`));
+        return reject(
+          new Error(`ddgr produced no output (exit ${code}): ${stderr || "(empty stderr)"}`),
+        );
       }
       try {
         resolve(parseOutput(stdout, limit));

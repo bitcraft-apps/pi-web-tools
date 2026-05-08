@@ -69,11 +69,7 @@ function tryDecode(buf: ArrayBuffer, charset: string): string | undefined {
   }
 }
 
-function pickCharset(
-  response: Response,
-  buf: ArrayBuffer,
-  kind: BodyKind,
-): string | undefined {
+function pickCharset(response: Response, buf: ArrayBuffer, kind: BodyKind): string | undefined {
   const httpCharset = parseCharset(response.headers.get("content-type") ?? "");
   if (httpCharset) return httpCharset;
   if (kind === "html") return sniffHtmlMetaCharset(buf);
@@ -120,7 +116,11 @@ async function readBoundedBody(response: Response): Promise<ArrayBuffer> {
       if (next > MAX_RESPONSE_BYTES) {
         // Cancel the stream so the underlying connection is released; without
         // this, undici keeps the socket alive trying to drain the rest.
-        try { await reader.cancel(); } catch { /* already closed */ }
+        try {
+          await reader.cancel();
+        } catch {
+          /* already closed */
+        }
         throw tooLarge(true);
       }
       if (next > buf.byteLength) {
@@ -135,16 +135,17 @@ async function readBoundedBody(response: Response): Promise<ArrayBuffer> {
       total = next;
     }
   } finally {
-    try { reader.releaseLock(); } catch { /* already released */ }
+    try {
+      reader.releaseLock();
+    } catch {
+      /* already released */
+    }
   }
   // Hand back a tight slice so decodeBody's TextDecoder doesn't see padding.
   return buf.buffer.slice(0, total);
 }
 
-async function decodeBody(
-  response: Response,
-  kind: BodyKind,
-): Promise<string> {
+async function decodeBody(response: Response, kind: BodyKind): Promise<string> {
   const buf = await readBoundedBody(response);
   const charset = pickCharset(response, buf, kind);
   if (charset) {
@@ -165,7 +166,8 @@ function classifyMime(ct: string): BodyKind | "binary" {
     lower.startsWith("video/") ||
     lower.startsWith("audio/") ||
     lower.startsWith("application/octet-stream")
-  ) return "binary";
+  )
+    return "binary";
   // text/plain, text/markdown, text/xml, text/* etc., and missing → text
   return "text";
 }
@@ -216,7 +218,11 @@ async function fetchWithRedirects(url: URL, userAgent: string): Promise<Response
     const location = response.headers.get("location");
     if (!location) return response; // 3xx with no Location — let caller handle.
     // Discard the redirect body (without draining) to free the connection.
-    try { await response.body?.cancel(); } catch { /* already closed */ }
+    try {
+      await response.body?.cancel();
+    } catch {
+      /* already closed */
+    }
     let next: URL;
     try {
       next = new URL(location, current);
@@ -255,8 +261,16 @@ async function readBodyPrefix(response: Response, max: number): Promise<string> 
       if (total >= max) break;
     }
   } finally {
-    try { await reader.cancel(); } catch { /* already closed */ }
-    try { reader.releaseLock(); } catch { /* already released */ }
+    try {
+      await reader.cancel();
+    } catch {
+      /* already closed */
+    }
+    try {
+      reader.releaseLock();
+    } catch {
+      /* already released */
+    }
   }
   // Hard cut at `max` bytes can split a multi-byte UTF-8 sequence at the
   // tail, producing a trailing U+FFFD. Safe here because the only consumer
@@ -264,7 +278,10 @@ async function readBodyPrefix(response: Response, max: number): Promise<string> 
   // marker list ever gains non-ASCII tokens.
   const buf = new Uint8Array(total);
   let offset = 0;
-  for (const c of chunks) { buf.set(c, offset); offset += c.byteLength; }
+  for (const c of chunks) {
+    buf.set(c, offset);
+    offset += c.byteLength;
+  }
   return new TextDecoder("utf-8", { fatal: false }).decode(buf);
 }
 
@@ -296,10 +313,7 @@ async function isCloudflareChallenge(response: Response): Promise<boolean> {
 
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   const url = validateUrl(input.url);
-  const maxChars = Math.min(
-    Math.max(1, input.max_chars ?? MAX_CHARS_DEFAULT),
-    MAX_CHARS_HARD_CAP,
-  );
+  const maxChars = Math.min(Math.max(1, input.max_chars ?? MAX_CHARS_DEFAULT), MAX_CHARS_HARD_CAP);
 
   // If the first attempt throws (e.g. SSRF guard tripped on a redirect),
   // we deliberately do NOT fall through to the CF UA-swap retry — blocked

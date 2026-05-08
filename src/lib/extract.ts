@@ -95,7 +95,10 @@ function runExtractor(cmd: string, args: string[], stdin: string): Promise<strin
       stdoutChunks.push(c);
     });
     child.stderr.on("data", (c: Buffer) => stderrChunks.push(c));
-    child.on("error", (err) => { clearTimeout(timer); reject(err); });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
     child.on("close", (code) => {
       clearTimeout(timer);
       if (overflowed) return reject(new Error(`${cmd} stdout exceeded ${EXTRACT_MAX_BYTES} bytes`));
@@ -152,11 +155,7 @@ export async function extractContent(html: string, url: string): Promise<string 
       //   the article body). Revisit if chrome leakage is too high in practice.
       // NOTE: trafilatura has no documented way to absolutify relative links
       //   when reading stdin; output keeps relative hrefs. rdrview's -u resolves.
-      return await runExtractor(
-        "trafilatura",
-        ["--html", "--no-comments"],
-        html,
-      );
+      return await runExtractor("trafilatura", ["--html", "--no-comments"], html);
     }
     // rdrview: -H = output cleaned HTML, -u = base URL for relative-link resolution.
     // No positional path/url means "read HTML from stdin" per rdrview(1).

@@ -23,9 +23,9 @@ function mockFetchOnce(opts: {
   const headers = new Headers(opts.headers ?? { "content-type": "text/html; charset=utf-8" });
   const status = opts.status ?? 200;
   const body = opts.body ?? "<h1>Hi</h1>";
-  global.fetch = vi.fn().mockResolvedValueOnce(
-    new Response(body as any, { status, headers })
-  ) as any;
+  global.fetch = vi
+    .fn()
+    .mockResolvedValueOnce(new Response(body as any, { status, headers })) as any;
 }
 
 beforeEach(() => {
@@ -43,7 +43,9 @@ describe("fetchAsMarkdown", () => {
   });
 
   it("blocks localhost", async () => {
-    await expect(fetchAsMarkdown({ url: "http://localhost:3000" })).rejects.toThrow(/blocked host/i);
+    await expect(fetchAsMarkdown({ url: "http://localhost:3000" })).rejects.toThrow(
+      /blocked host/i,
+    );
   });
 
   it("returns markdown for HTML response", async () => {
@@ -67,17 +69,27 @@ describe("fetchAsMarkdown", () => {
 
   it("throws on PDF", async () => {
     mockFetchOnce({ body: "%PDF...", headers: { "content-type": "application/pdf" } });
-    await expect(fetchAsMarkdown({ url: "https://example.com/x.pdf" })).rejects.toThrow(/cannot fetch.*pdf/i);
+    await expect(fetchAsMarkdown({ url: "https://example.com/x.pdf" })).rejects.toThrow(
+      /cannot fetch.*pdf/i,
+    );
   });
 
   it("throws on image/*", async () => {
     mockFetchOnce({ body: "...", headers: { "content-type": "image/png" } });
-    await expect(fetchAsMarkdown({ url: "https://example.com/x.png" })).rejects.toThrow(/cannot fetch.*image/i);
+    await expect(fetchAsMarkdown({ url: "https://example.com/x.png" })).rejects.toThrow(
+      /cannot fetch.*image/i,
+    );
   });
 
   it("throws on HTTP 404", async () => {
-    mockFetchOnce({ status: 404, headers: { "content-type": "text/html" }, body: "<h1>Not Found</h1>" });
-    await expect(fetchAsMarkdown({ url: "https://example.com/missing" })).rejects.toThrow(/HTTP 404/);
+    mockFetchOnce({
+      status: 404,
+      headers: { "content-type": "text/html" },
+      body: "<h1>Not Found</h1>",
+    });
+    await expect(fetchAsMarkdown({ url: "https://example.com/missing" })).rejects.toThrow(
+      /HTTP 404/,
+    );
   });
 
   it("treats unknown text mime as text/plain", async () => {
@@ -254,9 +266,9 @@ describe("content extraction wire-in", () => {
 
 describe("charset decoding", () => {
   // "Łódź" in windows-1250: Ł=0xA3, ó=0xF3, d=0x64, ź=0x9F
-  const POLISH_WIN1250 = new Uint8Array([0xA3, 0xF3, 0x64, 0x9F]);
+  const POLISH_WIN1250 = new Uint8Array([0xa3, 0xf3, 0x64, 0x9f]);
   // "Łódź" in iso-8859-2: Ł=0xA3, ó=0xF3, d=0x64, ź=0xBC
-  const POLISH_ISO88592 = new Uint8Array([0xA3, 0xF3, 0x64, 0xBC]);
+  const POLISH_ISO88592 = new Uint8Array([0xa3, 0xf3, 0x64, 0xbc]);
 
   it("decodes windows-1250 Polish diacritics correctly", async () => {
     mockFetchOnce({
@@ -308,7 +320,7 @@ describe("charset decoding", () => {
 
 describe("HTML meta charset sniffing", () => {
   // "Łódź" in windows-1250
-  const POLISH_WIN1250 = new Uint8Array([0xA3, 0xF3, 0x64, 0x9F]);
+  const POLISH_WIN1250 = new Uint8Array([0xa3, 0xf3, 0x64, 0x9f]);
 
   function buildHtml(metaTag: string): Uint8Array {
     const head = `<!doctype html><html><head>${metaTag}</head><body>`;
@@ -322,8 +334,7 @@ describe("HTML meta charset sniffing", () => {
     return out;
   }
 
-  const htmlWithMetaCharset = (charset: string) =>
-    buildHtml(`<meta charset="${charset}">`);
+  const htmlWithMetaCharset = (charset: string) => buildHtml(`<meta charset="${charset}">`);
   const htmlWithMetaHttpEquiv = (charset: string) =>
     buildHtml(`<meta http-equiv="Content-Type" content="text/html; charset=${charset}">`);
 
@@ -442,8 +453,11 @@ describe("Cloudflare retry hack", () => {
     const cfHeaders = new Headers({ "content-type": "text/html", "cf-mitigated": "challenge" });
     const okHeaders = new Headers({ "content-type": "text/html" });
 
-    const mock = vi.fn()
-      .mockResolvedValueOnce(new Response("<html>blocked</html>", { status: 200, headers: cfHeaders }))
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("<html>blocked</html>", { status: 200, headers: cfHeaders }),
+      )
       .mockResolvedValueOnce(new Response("<h1>OK</h1>", { status: 200, headers: okHeaders }));
     global.fetch = mock as any;
 
@@ -456,8 +470,11 @@ describe("Cloudflare retry hack", () => {
 
   it("retries with UA=opencode on 403 + 'Just a moment' body", async () => {
     const headers = new Headers({ "content-type": "text/html" });
-    const mock = vi.fn()
-      .mockResolvedValueOnce(new Response("<html>Just a moment...</html>", { status: 403, headers }))
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("<html>Just a moment...</html>", { status: 403, headers }),
+      )
       .mockResolvedValueOnce(new Response("<h1>OK</h1>", { status: 200, headers }));
     global.fetch = mock as any;
 
@@ -467,26 +484,35 @@ describe("Cloudflare retry hack", () => {
 
   it("throws if challenge persists after retry", async () => {
     const cfHeaders = new Headers({ "content-type": "text/html", "cf-mitigated": "challenge" });
-    const mock = vi.fn()
+    const mock = vi
+      .fn()
       .mockResolvedValue(new Response("<html>blocked</html>", { status: 200, headers: cfHeaders }));
     global.fetch = mock as any;
 
-    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/JS|cannot fetch/i);
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
+      /JS|cannot fetch/i,
+    );
   });
 
   // Issue #59: CF detection now reads only the first 4 KB of the body.
 
   it("detects CF markers in first 1 KB of a 403 body", async () => {
-    const html = "<html><head><title>Just a moment...</title></head><body>cf-chl-bypass</body></html>";
-    const mock = vi.fn()
-      .mockResolvedValueOnce(new Response(html, {
-        status: 403,
-        headers: new Headers({ "content-type": "text/html" }),
-      }))
-      .mockResolvedValueOnce(new Response("<h1>OK</h1>", {
-        status: 200,
-        headers: new Headers({ "content-type": "text/html" }),
-      }));
+    const html =
+      "<html><head><title>Just a moment...</title></head><body>cf-chl-bypass</body></html>";
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(html, {
+          status: 403,
+          headers: new Headers({ "content-type": "text/html" }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response("<h1>OK</h1>", {
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+        }),
+      );
     global.fetch = mock as any;
 
     await fetchAsMarkdown({ url: "https://example.com" });
@@ -535,7 +561,10 @@ describe("Cloudflare retry hack", () => {
         new Response(html, { status: 403, headers: new Headers({ "content-type": "text/html" }) }),
       )
       .mockResolvedValueOnce(
-        new Response("<h1>ok</h1>", { status: 200, headers: new Headers({ "content-type": "text/html" }) }),
+        new Response("<h1>ok</h1>", {
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+        }),
       );
     global.fetch = mock as any;
 
@@ -552,9 +581,11 @@ describe("Cloudflare retry hack", () => {
     // First byte of marker at 4090 → marker spans bytes 4090..4102, crosses 4096.
     const padLen = 4090 - prefix.length;
     const html = `${prefix}${"x".repeat(padLen)}${marker}...</body></html>`;
-    const mock = vi.fn().mockResolvedValueOnce(
-      new Response(html, { status: 403, headers: new Headers({ "content-type": "text/html" }) }),
-    );
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(html, { status: 403, headers: new Headers({ "content-type": "text/html" }) }),
+      );
     global.fetch = mock as any;
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
@@ -610,12 +641,15 @@ describe("redirect re-validation (issue #57)", () => {
   });
 
   it("follows a redirect that stays on a public host", async () => {
-    const mock = vi.fn()
+    const mock = vi
+      .fn()
       .mockResolvedValueOnce(redirectResponse("https://example.org/landing"))
-      .mockResolvedValueOnce(new Response("<h1>OK</h1>", {
-        status: 200,
-        headers: new Headers({ "content-type": "text/html" }),
-      }));
+      .mockResolvedValueOnce(
+        new Response("<h1>OK</h1>", {
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+        }),
+      );
     global.fetch = mock as any;
 
     const md = await fetchAsMarkdown({ url: "https://example.com" });
@@ -624,8 +658,7 @@ describe("redirect re-validation (issue #57)", () => {
   });
 
   it("throws when 302 points at loopback", async () => {
-    const mock = vi.fn()
-      .mockResolvedValueOnce(redirectResponse("http://127.0.0.1/admin"));
+    const mock = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1/admin"));
     global.fetch = mock as any;
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
@@ -633,7 +666,8 @@ describe("redirect re-validation (issue #57)", () => {
   });
 
   it("throws when 302 points at AWS IMDS (link-local)", async () => {
-    const mock = vi.fn()
+    const mock = vi
+      .fn()
       .mockResolvedValueOnce(redirectResponse("http://169.254.169.254/latest/meta-data/"));
     global.fetch = mock as any;
 
@@ -646,8 +680,7 @@ describe("redirect re-validation (issue #57)", () => {
   it.todo("throws when 302 points at RFC1918 (depends on #56 expanded guard)");
 
   it("throws when 302 points at localhost by name", async () => {
-    const mock = vi.fn()
-      .mockResolvedValueOnce(redirectResponse("http://localhost:3000/admin"));
+    const mock = vi.fn().mockResolvedValueOnce(redirectResponse("http://localhost:3000/admin"));
     global.fetch = mock as any;
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
@@ -657,12 +690,15 @@ describe("redirect re-validation (issue #57)", () => {
     // Relative redirect target that itself is a blocked alt-encoding would
     // be impossible (always relative to https://example.com); this just
     // proves relative paths flow through validateUrl correctly.
-    const mock = vi.fn()
+    const mock = vi
+      .fn()
       .mockResolvedValueOnce(redirectResponse("/landing"))
-      .mockResolvedValueOnce(new Response("<h1>OK</h1>", {
-        status: 200,
-        headers: new Headers({ "content-type": "text/html" }),
-      }));
+      .mockResolvedValueOnce(
+        new Response("<h1>OK</h1>", {
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+        }),
+      );
     global.fetch = mock as any;
 
     await fetchAsMarkdown({ url: "https://example.com/page" });
@@ -682,7 +718,9 @@ describe("redirect re-validation (issue #57)", () => {
     });
     global.fetch = mock as any;
 
-    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/too many redirects/i);
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
+      /too many redirects/i,
+    );
   });
 
   it("returns a 3xx with no Location instead of looping", async () => {

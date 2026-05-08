@@ -183,7 +183,10 @@ function isBlockedV6(b: Uint8Array): boolean {
   // ::1 loopback or :: unspecified — both are 15 zero bytes followed by 0 or 1.
   let allZeroExceptLast = true;
   for (let i = 0; i < 15; i++) {
-    if (b[i] !== 0) { allZeroExceptLast = false; break; }
+    if (b[i] !== 0) {
+      allZeroExceptLast = false;
+      break;
+    }
   }
   if (allZeroExceptLast && (b[15] === 0 || b[15] === 1)) return true;
 
@@ -195,14 +198,22 @@ function isBlockedV6(b: Uint8Array): boolean {
 
   // ::ffff:0:0/96 IPv4-mapped — recheck against v4 rules.
   let mapped = true;
-  for (let i = 0; i < 10; i++) if (b[i] !== 0) { mapped = false; break; }
+  for (let i = 0; i < 10; i++)
+    if (b[i] !== 0) {
+      mapped = false;
+      break;
+    }
   if (mapped && b[10] === 0xff && b[11] === 0xff) {
     return isBlockedV4(b.slice(12));
   }
 
   // ::/96 IPv4-compatible (deprecated, but fold for safety).
   let v4compat = true;
-  for (let i = 0; i < 12; i++) if (b[i] !== 0) { v4compat = false; break; }
+  for (let i = 0; i < 12; i++)
+    if (b[i] !== 0) {
+      v4compat = false;
+      break;
+    }
   if (v4compat) return isBlockedV4(b.slice(12));
 
   // 2002::/16 6to4 — embedded v4 in bytes 2..5. Routes via 6to4 relay to the

@@ -25,7 +25,11 @@ describe("parseOutput", () => {
 
   it("respects limit", () => {
     const stdout = JSON.stringify(
-      Array.from({ length: 10 }, (_, i) => ({ title: `T${i}`, url: `https://e${i}.com`, abstract: "" }))
+      Array.from({ length: 10 }, (_, i) => ({
+        title: `T${i}`,
+        url: `https://e${i}.com`,
+        abstract: "",
+      })),
     );
     expect(parseOutput(stdout, 3)).toHaveLength(3);
   });
@@ -43,9 +47,7 @@ describe("parseOutput", () => {
 describe("buildDdgrArgs", () => {
   it("builds default args without region or unsafe", () => {
     const args = buildDdgrArgs("hello", 8);
-    expect(args).toEqual([
-      "--json", "--num", "8", "--noprompt", "--", "hello",
-    ]);
+    expect(args).toEqual(["--json", "--num", "8", "--noprompt", "--", "hello"]);
     expect(args).not.toContain("--reg");
     expect(args).not.toContain("--unsafe");
   });

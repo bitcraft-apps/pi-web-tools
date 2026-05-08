@@ -12,7 +12,11 @@ function fakeChild(stdoutText: string, exitCode = 0) {
   const ee: any = new EventEmitter();
   ee.stdout = Readable.from([stdoutText]);
   ee.stderr = Readable.from([""]);
-  ee.stdin = new Writable({ write(_c, _e, cb) { cb(); } });
+  ee.stdin = new Writable({
+    write(_c, _e, cb) {
+      cb();
+    },
+  });
   setImmediate(() => ee.emit("close", exitCode));
   return ee;
 }

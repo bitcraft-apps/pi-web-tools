@@ -12,9 +12,12 @@ change to those settings.
 ## Required status checks on `main`
 
 The following check names must pass before a PR can be merged. They are
-copy-pasted verbatim from the GitHub branch-protection UI:
+copy-pasted verbatim from the GitHub branch-protection UI. GitHub renders
+multi-job workflow checks as `<workflow name> / <job id>` (or `<job name>`
+if set), which is why the job id matters for the binding — see the warning
+below.
 
-- `vitest (bun)` — produced by `.github/workflows/test.yml`
+- `ci / checks` — produced by `.github/workflows/ci.yml`
 - `Lint PR title (Conventional Commits)` — produced by `.github/workflows/pr-title.yml`
 
 ## ⚠️ Renaming a job breaks the required-check binding

@@ -32,7 +32,13 @@ jobs:
 
       # Type-check before tests: type errors are a cheaper signal than
       # a full vitest run, and vitest (esbuild) strips types without
-      # checking them. tsgo is @typescript/native-preview, pinned exact.
+      # checking them. tsgo is @typescript/native-preview, pinned exact
+      # in package.json (preview channel — no semver, daily dev builds).
+      # Bump cadence: refresh roughly weekly; track issue #50.
+      # Escape hatch if tsgo regresses on a real diagnostic: temporarily
+      # swap this step for `bunx -p typescript tsc --noEmit -p tsconfig.json`
+      # (and add `typescript` back to devDependencies) until the next
+      # @typescript/native-preview release lands.
       - run: bun run typecheck
 
       - run: bun run test

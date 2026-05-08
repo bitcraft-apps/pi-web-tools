@@ -1,0 +1,43 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import", "node", "promise"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "off",
+    "style": "off",
+    "pedantic": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  "options": {
+    "typeAware": true
+  },
+  "rules": {
+    // Disabled: the `__` prefix on test-only reset hooks (`__resetExtractorCache`,
+    // `__resetConverterCache`) is a deliberate self-policing convention marking
+    // them as not part of the public API; see the JSDoc on each. Maintaining an
+    // allow-list here would silently fail-lint future reset hooks.
+    "eslint/no-underscore-dangle": "off",
+    // Disabled pending #83. Without `tsconfig.noUncheckedIndexedAccess`,
+    // the 24 `arr[i]!` markers in src/lib/url-guard.ts read as redundant.
+    // Enabling that tsconfig flag (in #83) makes them necessary AND surfaces
+    // 13 real missing-null-check sites elsewhere. Re-enable this rule there.
+    "typescript/no-unnecessary-type-assertion": "off"
+  },
+  "overrides": [
+    {
+      "files": ["test/**"],
+      // Must mirror the top-level `plugins` list + `vitest`. Oxlint overrides
+      // replace (don't merge) the array; if you add a plugin above, add it here too.
+      "plugins": ["typescript", "unicorn", "oxc", "import", "node", "promise", "vitest"],
+      "rules": {
+        // Disabled pending #84. Vitest mock fixtures use `(spawn as any)`,
+        // `{} as any`, `mock as any` etc. throughout. These are legitimate
+        // mock plumbing, not real `as any` footguns; tightening requires a
+        // test-wide refactor to `vi.mocked(...)` typing. Re-enable in #84.
+        "typescript/no-unsafe-type-assertion": "off"
+      }
+    }
+  ]
+}

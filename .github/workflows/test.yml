@@ -41,4 +41,8 @@ jobs:
       # @typescript/native-preview release lands.
       - run: bun run typecheck
 
+      # Cheapest-signal-first: typecheck → lint → test. See #82 for the
+      # oxlint + oxlint-tsgolint adoption rationale and pinning notes.
+      - run: bun run lint
+
       - run: bun run test

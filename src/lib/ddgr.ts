@@ -14,7 +14,8 @@ export function parseOutput(stdout: string, limit: number): DdgrResult[] {
   try {
     raw = JSON.parse(stdout);
   } catch (e) {
-    throw new Error(`Failed to parse ddgr output: ${(e as Error).message}`);
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Failed to parse ddgr output: ${msg}`, { cause: e });
   }
   if (!Array.isArray(raw)) {
     throw new Error("ddgr output is not a JSON array");

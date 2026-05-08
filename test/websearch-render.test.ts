@@ -9,6 +9,9 @@ import { stubTheme } from "./_helpers/theme.js";
 
 const theme = stubTheme();
 
+// Arbitrary placeholder — the formatter is opaque to its actual value;
+// the real `keyHint("app.tools.expand", ...)` call site is exercised in
+// the integration block at the bottom of this file.
 const EXPAND_HINT = "Ctrl+E";
 
 const SAMPLE_RESULTS: NonNullable<WebsearchToolDetails["results"]> = [
@@ -153,6 +156,40 @@ describe("formatWebsearchResult", () => {
       ),
     ).toBe('no results for ""');
   });
+
+  it("strips C0/ANSI escapes from ddgr-supplied title/url/snippet", () => {
+    const out = formatWebsearchResult(
+      {
+        details: {
+          query: "q",
+          results: [
+            {
+              title: "Evil\x1b[2JTitle",
+              url: "https://e.test\x07/path",
+              snippet: "line1\nline2\x1b[31mred",
+            },
+          ],
+        },
+        expanded: true,
+        isError: false,
+        expandHint: EXPAND_HINT,
+      },
+      theme,
+    );
+    expect(out).not.toContain("\x1b");
+    expect(out).not.toContain("\x07");
+    expect(out).not.toContain("\nline2"); // newline inside snippet was stripped
+    expect(out).toContain("EvilTitle");
+    expect(out).toContain("https://e.test/path");
+    expect(out).toContain("line1line2red");
+  });
+
+  it("quote() escapes embedded quotes/backslashes/control chars but keeps non-ASCII readable", () => {
+    expect(formatWebsearchCall({ query: "привет" }, theme)).toBe('websearch "привет"');
+    expect(formatWebsearchCall({ query: 'a"b\\c\x1bd' }, theme)).toBe(
+      'websearch "a\\"b\\\\c\\x1bd"',
+    );
+  });
 });
 
 // The collapsed-view tests above feed `formatWebsearchResult` a fake
@@ -172,9 +209,19 @@ describe("formatWebsearchResult", () => {
 describe("keyHint integration", () => {
   beforeAll(() => {
     // keyHint() resolves theme colors via the global theme singleton,
-    // which throws if uninitialized. We don't care about the actual
-    // theme — just that the call itself doesn't blow up.
-    initTheme();
+    // which throws if uninitialized. Pin a known theme name ("dark" is
+    // shipped by pi-coding-agent) instead of relying on the implicit
+    // default — if the default ever requires an explicit name we get a
+    // clear failure here rather than a flaky one downstream.
+    try {
+      initTheme("dark");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `initTheme("dark") failed — pi-coding-agent's theme API may have changed: ${message}`,
+        { cause: err },
+      );
+    }
   });
 
   it("the real keyHint accepts the expand binding and includes the description", () => {

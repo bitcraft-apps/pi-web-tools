@@ -12,11 +12,58 @@ import { runDdgr } from "./lib/ddgr.js";
 type FormatterTheme = Pick<Theme, "fg" | "bold">;
 
 /**
- * Used as a cheap quote+escape (handles embedded quotes/control chars
- * and stays sane on streaming partials), not as JSON encoding.
+ * Wraps `s` in double quotes, escaping `"`, `\`, and C0 control chars
+ * (incl. DEL). Unlike `JSON.stringify`, non-ASCII printable Unicode
+ * passes through as-is, so `quote("привет")` renders readably in the
+ * header instead of as `\uXXXX` sequences.
  */
 function quote(s: string): string {
-  return JSON.stringify(s);
+  let out = '"';
+  for (const ch of s) {
+    const code = ch.codePointAt(0)!;
+    if (ch === '"' || ch === "\\") {
+      out += "\\" + ch;
+    } else if (code < 0x20 || code === 0x7f) {
+      out += "\\x" + code.toString(16).padStart(2, "0");
+    } else {
+      out += ch;
+    }
+  }
+  return out + '"';
+}
+
+/**
+ * Strips C0 control chars (0x00–0x1F), DEL (0x7F), and CSI escape
+ * sequences (`ESC [ … final-byte`) from untrusted strings before they
+ * hit the terminal. Result fields from `ddgr` are attacker-influenced
+ * (a page title can contain `\x1b[2J` or other ANSI escapes); without
+ * sanitization the expanded view would render them raw and let a
+ * malicious page clear/repaint the user's screen.
+ *
+ * Only the ESC byte itself is required for CSI interpretation, so
+ * dropping ESC is sufficient for *safety*. The CSI regex sweep is
+ * cosmetic: it removes the leftover `[2J`-style parameter+final bytes
+ * so the rendered title doesn't look like garbage. Tab and newline are
+ * dropped too — the renderer composes its own layout and embedded
+ * whitespace would break alignment.
+ */
+function sanitize(s: string): string {
+  // CSI: ESC [ <params 0x30-0x3F>* <intermediates 0x20-0x2F>* <final 0x40-0x7E>
+  // ESC byte injected via String.fromCharCode so the regex *source* never
+  // contains a literal control char (oxlint's no-control-regex rule).
+  const ESC = String.fromCharCode(0x1b);
+  const csiStripped = s.replace(
+    new RegExp(`${ESC}\\[[\\u0030-\\u003f]*[\\u0020-\\u002f]*[\\u0040-\\u007e]`, "g"),
+    "",
+  );
+  let out = "";
+  for (const ch of csiStripped) {
+    const code = ch.codePointAt(0)!;
+    if (code >= 0x20 && code !== 0x7f) {
+      out += ch;
+    }
+  }
+  return out;
 }
 
 /**
@@ -25,9 +72,11 @@ function quote(s: string): string {
  * pi-coding-agent's built-in `read`/`write` tool renderers — tool rows
  * sit flush in the chat container, the host adds outer padding.
  *
- * The instanceof guard matters because pi-tui is declared as a peerDep
- * with version `"*"`. If a consumer ends up with two physical copies of
- * pi-tui in node_modules, `context.lastComponent` may be a `Text` from
+ * The instanceof guard matters because pi-tui is a peer dep: even
+ * pinned to a single major, a consumer hoisting differently (or
+ * mixing in a transitive dep on a different range) can end up with
+ * two physical copies of pi-tui in node_modules.
+ * `context.lastComponent` may be a `Text` from
  * the *other* copy — different class identity, different prototype.
  * Without the guard, .setText() would either crash or write to a stale
  * instance the host then discards. With the guard, we degrade to
@@ -81,11 +130,13 @@ export interface WebsearchToolDetails {
    */
   results?: DdgrResult[];
   /**
-   * @deprecated since 1.x — see #109. Legacy field. New sessions derive
-   * count from results.length; this is kept only so old persisted
-   * sessions (which had no `results`) still render the right header.
-   * Removal is tracked in the linked issue and is non-breaking — the
-   * field is renderer-internal and not part of the public API.
+   * @deprecated since 1.x — see #109. Read-only/legacy: only the
+   * renderer's old-session fallback consumes this, and `execute()` no
+   * longer writes it. New code MUST NOT set `count`; derive from
+   * `results.length` instead. Kept solely so sessions persisted before
+   * `results` existed still render the right header. Removal is
+   * tracked in the linked issue and is non-breaking — the field is
+   * renderer-internal and not part of the public API.
    */
   count?: number;
 }
@@ -100,6 +151,13 @@ export interface WebsearchCallArgs {
 /**
  * Pure formatter for the websearch tool call header. Keeps non-default
  * args muted so default invocations stay compact.
+ *
+ * Args explicitly set to their default value (e.g. `limit: 8`,
+ * `safesearch: "moderate"`) are intentionally omitted from the header
+ * — the goal is a compact line for the common case, and the default is
+ * what the LLM gets if it omits the arg anyway. Callers that need to
+ * see the literal arg list should inspect the raw tool call, not this
+ * formatter's output.
  */
 export function formatWebsearchCall(
   args: WebsearchCallArgs | undefined,
@@ -180,13 +238,21 @@ export function formatWebsearchResult(
   }
 
   const lines: string[] = [header];
+  // Blank line before every item — including the first — so the header
+  // is visually separated from the list and items are separated from
+  // each other. Intentional: header acts as the "zeroth" item.
   for (let i = 0; i < results.length; i++) {
     const r = results[i]!;
+    // Sanitize ddgr-supplied fields: a malicious page title can carry
+    // ANSI escapes that would otherwise be rendered raw by the TUI.
+    const title = sanitize(r.title);
+    const url = sanitize(r.url);
+    const snippet = sanitize(r.snippet ?? "");
     lines.push("");
-    lines.push(`${i + 1}. ${theme.fg("accent", r.title)}`);
-    lines.push(`   ${theme.fg("dim", r.url)}`);
-    if (r.snippet) {
-      lines.push(`   ${r.snippet}`);
+    lines.push(`${i + 1}. ${theme.fg("accent", title)}`);
+    lines.push(`   ${theme.fg("dim", url)}`);
+    if (snippet) {
+      lines.push(`   ${snippet}`);
     }
   }
   return lines.join("\n");

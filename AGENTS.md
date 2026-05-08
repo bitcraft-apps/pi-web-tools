@@ -72,9 +72,11 @@ right CLI for the host; this package provides general primitives only.
 
 ## GitHub Actions naming
 
-- **Filename:** kebab-case, lowercase, named after purpose. Tool names are fine when the tool *is* the purpose (e.g. `release-please.yml`, `dependabot.yml`).
+- **Filename:** kebab-case, named after purpose. Tool names are fine when the tool *is* the purpose (e.g. `release-please.yml`, `dependabot.yml`).
 - **Workflow `name:`:** lowercase, kebab-case, mirrors the filename stem.
 - **Job ID** (the YAML key): kebab-case, names the gate (e.g. `typecheck`, `publish-npm`).
-- **Job `name:`:** omit unless it adds info beyond the ID.
+- **Job `name:`:** omit unless it adds info beyond the ID. It adds info when the ID alone is ambiguous, e.g. matrix legs: `name: node ${{ matrix.node }}`.
 
-Rationale: matches the Conventional Commits + npm script style already used throughout the repo.
+Rationale: the workflow/job ID is what appears in PR required-status-check config and failure notifications, so it must match the filename and be greppable.
+
+Existing workflows that predate this rule (notably `pr-title.yml`) will be aligned in #94.

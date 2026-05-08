@@ -2,27 +2,30 @@ name: pr-title
 
 # Trigger choice: `pull_request_target`, not `pull_request`.
 #
-# Why: this workflow lints the PR title only. It needs no PR code checkout,
-# but it MUST post a status context back to the base repo so branch
-# protection can require it — including for PRs from forks. `pull_request`
-# from a fork runs in the fork's context with a read-only `GITHUB_TOKEN`
-# and cannot write a required status to the base repo;
-# `pull_request_target` runs in the base repo's context with a
-# write-capable token, which is what we need here.
+# Why: this workflow lints the PR title only, and the required status
+# check must report on PRs from first-time fork contributors without a
+# maintainer first clicking "Approve and run". `pull_request` runs from
+# new fork contributors are held pending manual approval, so the
+# required check never reports and the PR sits unmergeable until
+# someone notices. `pull_request_target` runs in the base repo context
+# and bypasses that approval gate, so the check reports immediately on
+# every PR. (The job conclusion itself is the status — no token write
+# is involved; the action only reads `pull_request.title` from the
+# event payload.)
 #
-# Footgun — DO NOT add `actions/checkout` of the PR head
-# (`ref: ${{ github.event.pull_request.head.sha }}` or similar) while
-# keeping `pull_request_target`. That is the canonical pattern that
-# executes attacker-controlled code from a fork with access to the base
-# repo's secrets and write token. This is the textbook
-# `pull_request_target` RCE. If this workflow ever needs to read PR
-# source, switch the trigger to `pull_request` first.
+# Footgun — DO NOT, while keeping `pull_request_target`:
+#   - `actions/checkout` the PR head
+#     (`ref: ${{ github.event.pull_request.head.sha }}` or similar), or
+#   - interpolate any `github.event.pull_request.head.*` field
+#     (`head.ref`, `head.repo.*`, etc.) into a `run:` script.
+# Both execute attacker-controlled strings from a fork inside the base
+# repo's context with its secrets and write token — the textbook
+# `pull_request_target` RCE. A title-only linter is unlikely to grow
+# either, but the warning is cheap. If this workflow ever needs to read
+# PR source, switch the trigger to `pull_request` first.
 #
-# `permissions:` is deliberately scoped to `pull-requests: read` only.
-# action-semantic-pull-request only reads PR metadata (title); it does
-# not need write to PRs, contents, checks, or statuses. Keeping the token
-# minimal contains the blast radius of the elevated
-# `pull_request_target` context.
+# `permissions:` below is the minimum scope needed to contain the
+# `pull_request_target` blast radius.
 on:
   pull_request_target:
     types:

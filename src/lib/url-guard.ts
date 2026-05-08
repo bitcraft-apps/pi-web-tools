@@ -134,7 +134,7 @@ function parseIPv6(host: string): Uint8Array | null {
   if (doubleColonCount === 0 && totalGroups !== 8) return null;
   if (doubleColonCount === 1 && totalGroups >= 8) return null;
 
-  const groups: number[] = new Array(8).fill(0);
+  const groups: number[] = Array<number>(8).fill(0);
   for (let i = 0; i < head.length; i++) {
     if (!/^[0-9a-fA-F]{1,4}$/.test(head[i]!)) return null;
     groups[i] = parseInt(head[i]!, 16);
@@ -235,7 +235,7 @@ export function validateUrl(input: string): URL {
 
   // WHATWG URL accepts `http:///path` and shifts "path" into the host slot;
   // detect the empty-authority form on the raw input string before that lift.
-  if (!url.hostname || /^[a-z][a-z0-9+.\-]*:\/\/(\/|$|\?|#)/i.test(input)) {
+  if (!url.hostname || /^[a-z][a-z0-9+.-]*:\/\/(\/|$|\?|#)/i.test(input)) {
     throw new Error(`Empty host in URL: ${input}`);
   }
 

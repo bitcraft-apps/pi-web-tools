@@ -21,6 +21,30 @@
 // `net.connect`, so the lookup hook is not invoked for them. That's fine:
 // `validateUrl` already rejects literals in the blocked ranges before we
 // ever call fetch.
+//
+// KNOWN CONSTRAINT — undici dual-copy drift
+// ------------------------------------------
+// Node ships its own bundled copy of undici behind global `fetch`. The
+// `dispatcher:` per-request option is recognized by Node's bundled fetch via
+// a duck-typed/symbol interface, and our user-installed undici's `Agent`
+// happens to satisfy it. If the installed undici (`dependencies` in
+// package.json) drifts a major version away from the one Node bundles, the
+// dispatcher hook can silently stop being honored — fetch would then bypass
+// `lookupHook` and re-open the SSRF/DNS-rebinding hole, with no test failure
+// (unit tests stub `dns.lookup`, so they pass even if undici is bypassed).
+//
+// We support `engines.node >= 22`. Node 22 LTS bundles undici 6.x and Node
+// 24 bundles undici 7.x; we cannot pin a single major that matches both.
+// Mitigations:
+//   - Keep the user-installed undici major in sync with the host Node's
+//     bundled major when possible.
+//   - When adding an integration test that exercises real `fetch`, include
+//     a positive assertion that `lookupHook` was invoked (proves the
+//     dispatcher made it through). See test/ssrf-agent.test.ts for the
+//     direct ssrfLookup tests; an end-to-end fetch test belongs in a
+//     network-gated suite (see `test:network`).
+//   - Track upstream undici / Node interop changes; revisit if Node exposes
+//     a stable public API for connect-time DNS hooks.
 
 import dns from "node:dns";
 import net from "node:net";
@@ -66,9 +90,10 @@ export function ssrfLookup(
           return;
         }
       }
-      // The 4-arg overload of LookupCallback is what `all: true` consumers
-      // expect. Cast through unknown because the union of overloads can't be
-      // expressed as a single positional call site.
+      // Pass the array through unchanged: every element was just validated
+      // by isBlockedAddress above, so handing the full list back to undici
+      // (which may iterate via Happy Eyeballs across families on connect
+      // failure) is safe.
       (cb as (err: NodeJS.ErrnoException | null, addresses: dns.LookupAddress[]) => void)(
         null,
         address,
@@ -79,7 +104,14 @@ export function ssrfLookup(
       cb(blockedError(hostname, address), "", 0);
       return;
     }
-    cb(null, address as string, family ?? 0);
+    // dns.lookup on success always returns family 4 or 6. Anything else is a
+    // contract violation by the resolver — fail closed rather than coerce a
+    // bogus value through to net.connect.
+    if (family !== 4 && family !== 6) {
+      cb(blockedError(hostname, address as string), "", 0);
+      return;
+    }
+    cb(null, address as string, family);
   });
 }
 
@@ -89,10 +121,17 @@ const lookupHook: net.LookupFunction = (hostname, options, callback) => {
   ssrfLookup(hostname, options, callback);
 };
 
-// Singleton dispatcher passed per-request to fetch(). Kept module-scoped so
-// connection pooling works across calls; the lookup hook itself is stateless.
-export const ssrfAgent = new Agent({
-  connect: {
-    lookup: lookupHook,
-  },
-});
+// Lazy singleton: the Agent (and its connection pool) is constructed on
+// first use rather than at module load. This keeps `import "./webfetch.js"`
+// from a non-fetching context (typecheck-only consumers, doc generators)
+// free of side effects. Once created, the dispatcher is reused across calls
+// so connection pooling still works.
+let cachedAgent: Agent | null = null;
+export function getSsrfAgent(): Agent {
+  cachedAgent ??= new Agent({
+    connect: {
+      lookup: lookupHook,
+    },
+  });
+  return cachedAgent;
+}

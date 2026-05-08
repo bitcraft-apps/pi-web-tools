@@ -1,5 +1,6 @@
+import type { Dispatcher } from "undici";
 import { validateUrl } from "./lib/url-guard.js";
-import { ssrfAgent } from "./lib/ssrf-agent.js";
+import { getSsrfAgent } from "./lib/ssrf-agent.js";
 import { htmlToMarkdown } from "./lib/html2md.js";
 import { extractContent } from "./lib/extract.js";
 import {
@@ -197,8 +198,8 @@ async function doFetch(url: URL, userAgent: string): Promise<Response> {
     // gap that validateUrl (string-only) cannot. See lib/ssrf-agent.ts.
     // Tests that replace global.fetch wholesale bypass this dispatcher — the
     // guarantee only holds when undici's real fetch runs.
-    dispatcher: ssrfAgent,
-  } as RequestInit & { dispatcher: unknown });
+    dispatcher: getSsrfAgent(),
+  } as RequestInit & { dispatcher: Dispatcher });
 }
 
 function isRedirect(status: number): boolean {

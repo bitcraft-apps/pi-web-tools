@@ -290,8 +290,10 @@ export function validateUrl(input: string): URL {
 //
 // `family` is the dns.lookup family (4 or 6). When omitted we fall back to the
 // shape of the address string. An address that doesn't parse as either family
-// (shouldn't happen for a real lookup result) is treated as not-blocked here;
-// the caller is responsible for rejecting unparseable inputs if it wants to.
+// (shouldn't happen for a real lookup result) is treated as BLOCKED here:
+// dns.lookup never produces garbage in practice, so reaching the fall-through
+// means a bug or a malicious caller, and fail-closed is the safer default for
+// a security helper.
 export function isBlockedAddress(address: string, family?: number): boolean {
   const looksV6 = family === 6 || address.includes(":");
   if (looksV6) {
@@ -300,5 +302,5 @@ export function isBlockedAddress(address: string, family?: number): boolean {
   }
   const v4 = parseIPv4(address);
   if (v4) return isBlockedV4(v4);
-  return false;
+  return true;
 }

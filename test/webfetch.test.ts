@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import dns from "node:dns";
 
 vi.mock("../src/lib/html2md.js", () => ({
   htmlToMarkdown: vi.fn(async (html: string) => `MD:${html.slice(0, 20)}`),
@@ -840,8 +841,6 @@ describe("DNS-rebinding guard (issue #64)", () => {
     expect(calls).toBe(2);
   });
 });
-
-import dns from "node:dns";
 
 describe("webfetchTool", () => {
   it("has correct shape", () => {

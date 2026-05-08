@@ -13,7 +13,7 @@ function stubLookup(answer: { address: string; family: 4 | 6 } | Error) {
         const cb = typeof options === "function" ? options : callback;
         const opts = typeof options === "function" ? {} : options;
         if (answer instanceof Error) {
-          cb(answer);
+          cb(answer, "", 0);
           return;
         }
         if (opts && opts.all) {

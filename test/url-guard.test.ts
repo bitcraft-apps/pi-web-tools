@@ -196,6 +196,9 @@ describe("isBlockedAddress", () => {
   it("blocks IPv4-mapped IPv6 of a blocked v4", () => {
     expect(isBlockedAddress("::ffff:127.0.0.1", 6)).toBe(true);
     expect(isBlockedAddress("::ffff:169.254.169.254", 6)).toBe(true);
+    // Also when family is omitted: the colon in the string is enough to send
+    // it down the v6 path, where isBlockedV6 unwraps the mapped form.
+    expect(isBlockedAddress("::ffff:10.0.0.1")).toBe(true);
   });
 
   it("infers family from address shape when omitted", () => {
@@ -209,9 +212,10 @@ describe("isBlockedAddress", () => {
     expect(isBlockedAddress("2606:4700:4700::1111", 6)).toBe(false);
   });
 
-  it("returns false for unparseable inputs (caller handles)", () => {
-    // dns.lookup never returns garbage like this in practice; documented
-    // tradeoff is to fall through rather than throw.
-    expect(isBlockedAddress("not-an-ip")).toBe(false);
+  it("fails closed for unparseable inputs", () => {
+    // dns.lookup never returns garbage like this in practice; reaching this
+    // branch means a bug or a malicious caller, so isBlockedAddress treats
+    // unparseable strings as blocked rather than falling through.
+    expect(isBlockedAddress("not-an-ip")).toBe(true);
   });
 });

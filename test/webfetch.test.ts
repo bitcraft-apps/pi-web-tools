@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import dns from "node:dns";
+import { Agent } from "undici";
+import { __setSsrfAgentForTesting, lookupHook } from "../src/lib/ssrf-agent.js";
 
 vi.mock("../src/lib/html2md.js", () => ({
   htmlToMarkdown: vi.fn(async (html: string) => `MD:${html.slice(0, 20)}`),
@@ -737,6 +740,153 @@ describe("redirect re-validation (issue #57)", () => {
 
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Drill through the TypeError("fetch failed") wrapper undici puts around
+// connect-time errors. Walks both `.cause` (the common case) and `.errors[]`
+// (AggregateError, which undici uses when Happy Eyeballs / `all: true` tries
+// multiple addresses and they all fail). Without the AggregateError fallback,
+// a multi-address path could hide the EBLOCKED inside `.errors[]` and the
+// test would silently fall back to `String(err)`, masking a real bypass.
+function walkBlocked(err: unknown): NodeJS.ErrnoException | null {
+  const seen = new Set<unknown>();
+  const stack: unknown[] = [err];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || seen.has(cur)) continue;
+    seen.add(cur);
+    if (cur instanceof Error && (cur as NodeJS.ErrnoException).code === "EBLOCKED") {
+      return cur as NodeJS.ErrnoException;
+    }
+    if (cur && typeof cur === "object") {
+      const c = (cur as { cause?: unknown }).cause;
+      if (c) stack.push(c);
+      const errs = (cur as { errors?: unknown }).errors;
+      if (Array.isArray(errs)) stack.push(...errs);
+    }
+  }
+  return null;
+}
+
+function blockedCause(err: unknown): string {
+  const blocked = walkBlocked(err);
+  return blocked ? blocked.message : String(err);
+}
+
+describe("DNS-rebinding guard (issue #64)", () => {
+  // These tests do NOT mock global.fetch — we need the real undici fetch to
+  // run so it goes through ssrfAgent's lookup hook. dns.lookup is stubbed so
+  // no actual network traffic happens (the lookup fails with EBLOCKED before
+  // any TCP connect is attempted).
+  //
+  // We install a fresh Agent built around a `vi.fn()`-wrapped `lookupHook`
+  // (`hookSpy`) before each test and assert it was actually invoked. This is
+  // the only thing that proves Node's bundled fetch honored our `dispatcher:`
+  // option — if a future undici dual-copy drift caused the dispatcher to be
+  // silently dropped, dns.lookup would still get called by undici's default
+  // connector, the request would still fail (because we stub dns to a blocked
+  // address), but `hookSpy` would have zero calls. See ssrf-agent.ts header.
+  const originalFetch = global.fetch;
+  let hookSpy: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    hookSpy = vi.fn(lookupHook);
+    __setSsrfAgentForTesting(
+      new Agent({ connect: { lookup: hookSpy as unknown as typeof lookupHook } }),
+    );
+  });
+  afterEach(() => {
+    global.fetch = originalFetch;
+    __setSsrfAgentForTesting(null);
+    vi.restoreAllMocks();
+  });
+
+  function stubDns(address: string, family: 4 | 6) {
+    return vi.spyOn(dns, "lookup").mockImplementation(((
+      _hostname: string,
+      options: any,
+      callback: any,
+    ) => {
+      const cb = typeof options === "function" ? options : callback;
+      const opts = typeof options === "function" ? {} : options;
+      if (opts && opts.all) {
+        cb(null, [{ address, family }]);
+      } else {
+        cb(null, address, family);
+      }
+    }) as unknown as typeof dns.lookup);
+  }
+
+  it("blocks a public name whose A record points at loopback", async () => {
+    // Public-looking hostname that passes validateUrl, then resolves to
+    // 127.0.0.1 — classic DNS rebinding. Without the connect-time recheck,
+    // this would hit whatever was on localhost.
+    stubDns("127.0.0.1", 4);
+    const err = await fetchAsMarkdown({ url: "http://rebind.example" }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(err).not.toBeNull();
+    expect(hookSpy).toHaveBeenCalled();
+    const blocked = walkBlocked(err);
+    expect(blocked?.code).toBe("EBLOCKED");
+    expect(blocked?.message).toMatch(/127\.0\.0\.1/);
+  });
+
+  it("blocks a public name whose A record points at AWS IMDS", async () => {
+    stubDns("169.254.169.254", 4);
+    const err = await fetchAsMarkdown({ url: "http://metadata.example" }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(blockedCause(err)).toMatch(/169\.254\.169\.254/);
+  });
+
+  it("blocks a public name whose AAAA record points at IPv6 loopback", async () => {
+    stubDns("::1", 6);
+    const err = await fetchAsMarkdown({ url: "http://rebind6.example" }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(blockedCause(err)).toMatch(/Blocked host.*::1/);
+  });
+
+  it("blocks a redirect target whose hostname rebinds to private", async () => {
+    // Two-stage attack: hop 1 is mocked at the global.fetch level (so we
+    // don't depend on a real public server existing); hop 2 is a public
+    // name that DNS-resolves to RFC1918. The redirect URL passes
+    // validateUrl (string looks public), but the connect-time lookup must
+    // reject it.
+    stubDns("10.0.0.1", 4);
+    let calls = 0;
+    global.fetch = ((url: any, init: any) => {
+      calls++;
+      if (calls === 1) {
+        return Promise.resolve(
+          new Response("", {
+            status: 302,
+            headers: new Headers({ location: "http://rebound.example/x" }),
+          }),
+        );
+      }
+      // Hand off to real undici fetch for hop 2 so ssrfAgent.lookup runs.
+      return originalFetch(url, init);
+    }) as typeof fetch;
+
+    const err = await fetchAsMarkdown({ url: "https://example.com" }).then(
+      () => null,
+      (e) => e,
+    );
+    // Assert specifically on err.cause-chain code === "EBLOCKED" (not just a
+    // message substring). If the dispatcher were silently dropped, hop 2's
+    // real DNS lookup of `rebound.example` would NXDOMAIN and the test could
+    // pass-by-accident on a regex match against the wrong error. The code
+    // check ensures the failure originated from our lookup hook.
+    expect(hookSpy).toHaveBeenCalled();
+    const blocked = walkBlocked(err);
+    expect(blocked?.code).toBe("EBLOCKED");
+    expect(blocked?.message).toMatch(/10\.0\.0\.1/);
+    expect(calls).toBe(2);
   });
 });
 

@@ -1,7 +1,10 @@
 // SSRF guard. Rejects URLs whose host resolves (by parsing alone, no DNS) to
 // an address in any of the blocked ranges below. Operates on the URL string
 // only — DNS rebinding (host validates as public, then resolves to internal IP
-// at connect time) is a separate concern not handled here.
+// at connect time) is handled separately by the connect-time IP recheck in
+// `ssrf-agent.ts`, which reuses `isBlockedAddress` exported from this module.
+// The string-level blocklist (BLOCKED_HOSTNAMES) below is defense-in-depth;
+// the IP recheck is the actual guard against rebinding.
 //
 // Blocked v4 ranges:
 //   127.0.0.0/8       loopback
@@ -273,8 +276,37 @@ export function validateUrl(input: string): URL {
   }
 
   // Not an IP literal — treat as DNS name. We cannot tell here whether DNS
-  // will resolve to an internal address; that's the DNS-rebinding gap noted
-  // in the module header. The literal-name blocklist (BLOCKED_HOSTNAMES) is
-  // the only check that applies.
+  // will resolve to an internal address; that gap is closed at connect time
+  // by ssrf-agent's custom lookup, which reruns isBlockedAddress on the
+  // resolved IP before the socket is opened. The literal-name blocklist
+  // (BLOCKED_HOSTNAMES) above remains as a fast-path / defense-in-depth.
   return url;
+}
+
+// Re-run the v4/v6 range checks against an already-resolved address string
+// (e.g. a `dns.lookup` result). Used by the connect-time SSRF guard to catch
+// DNS rebinding: a public name whose A record points at 127.0.0.1, an RFC1918
+// host, AWS IMDS (169.254.169.254), etc.
+//
+// `family` is the dns.lookup family (4 or 6). When omitted we fall back to the
+// shape of the address string. An address that doesn't parse as either family
+// (shouldn't happen for a real lookup result) is treated as BLOCKED here:
+// dns.lookup never produces garbage in practice, so reaching the fall-through
+// means a bug or a malicious caller, and fail-closed is the safer default for
+// a security helper.
+//
+// IMPORTANT: this is effectively `isBlockedOrUnparseable` — an input that is
+// neither a valid IPv4 nor a valid IPv6 literal returns `true` (BLOCKED), not
+// `false`. Do NOT reuse this for non-DNS-result input (e.g. user-supplied
+// hostnames) without understanding that fail-closed semantics. For a literal
+// like "not-an-ip", `isBlockedAddress("not-an-ip") === true`.
+export function isBlockedAddress(address: string, family?: number): boolean {
+  const looksV6 = family === 6 || address.includes(":");
+  if (looksV6) {
+    const v6 = parseIPv6(address);
+    if (v6) return isBlockedV6(v6);
+  }
+  const v4 = parseIPv4(address);
+  if (v4) return isBlockedV4(v4);
+  return true;
 }

@@ -30,7 +30,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "typescript": "^5.4.0",
+    "@typescript/native-preview": "7.0.0-dev.20260507.1",
     "vitest": "^3.2.4",
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-ai": "*",
@@ -39,7 +39,8 @@
   "scripts": {
     "test": "vitest --run",
     "test:watch": "vitest",
-    "test:network": "RUN_NETWORK_TESTS=1 vitest --run"
+    "test:network": "RUN_NETWORK_TESTS=1 vitest --run",
+    "typecheck": "tsgo --noEmit -p tsconfig.json"
   },
   "engines": {
     "node": ">=22"

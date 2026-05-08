@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v0.4.1...v1.0.0) (2026-05-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engines:** require Node >=22 ([#77](https://github.com/bitcraft-apps/pi-web-tools/issues/77))
+
+### Features
+
+* **engines:** require Node &gt;=22 ([#77](https://github.com/bitcraft-apps/pi-web-tools/issues/77)) ([6413fbf](https://github.com/bitcraft-apps/pi-web-tools/commit/6413fbf4c0be9f8b39b0d2ecfc4d7c8000cbeb57))
+
+
+### Bug Fixes
+
+* **security:** re-check resolved IP at connect time to block DNS rebinding ([#64](https://github.com/bitcraft-apps/pi-web-tools/issues/64)) ([#89](https://github.com/bitcraft-apps/pi-web-tools/issues/89)) ([bbfd8da](https://github.com/bitcraft-apps/pi-web-tools/commit/bbfd8da03c76ac43079b1008787a2898050d317c))
+
 ## [0.4.1](https://github.com/bitcraft-apps/pi-web-tools/compare/v0.4.0...v0.4.1) (2026-05-07)
 
 

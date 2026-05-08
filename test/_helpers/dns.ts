@@ -18,7 +18,7 @@ type DnsLookupCallback = (
 
 export type DnsLookupImpl = (
   hostname: string,
-  optionsOrCallback: dns.LookupOptions | DnsLookupCallback,
+  optionsOrFamilyOrCallback: dns.LookupOptions | number | DnsLookupCallback,
   maybeCallback?: DnsLookupCallback,
 ) => void;
 

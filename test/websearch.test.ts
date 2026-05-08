@@ -8,6 +8,11 @@ vi.mock("../src/lib/ddgr.js", () => ({
 import { websearchTool } from "../src/websearch.js";
 import { runDdgr } from "../src/lib/ddgr.js";
 
+// Module-scoped on purpose: the Proxy is stateless (every property read
+// throws), so sharing it across tests is safe and avoids per-test
+// allocation. If a future test needs to mutate per-case expectations,
+// inline `stubExtensionContext()` at that call site instead of mutating
+// this shared instance.
 const stubCtx = stubExtensionContext();
 
 function textOf(content: { type: string; text?: string }[]): string {

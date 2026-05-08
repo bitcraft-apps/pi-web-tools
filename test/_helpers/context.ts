@@ -21,8 +21,15 @@ export function stubExtensionContext(): ExtensionContext {
     {},
     {
       get(_t, prop) {
+        // Symbol reads (Symbol.toPrimitive, Symbol.iterator, Symbol.asyncIterator,
+        // `then` is a string but commonly probed by await, util.inspect.custom, etc.)
+        // are typically engine/runtime probes — not the tool body actually trying to
+        // use a context property. Returning `undefined` keeps the loud-failure
+        // behavior for real `ctx.foo` reads while not derailing String(ctx),
+        // util.inspect, or accidental `await ctx` with a misleading error.
+        if (typeof prop === "symbol" || prop === "then") return undefined;
         throw new Error(
-          `stubExtensionContext: tool under test unexpectedly read ctx.${String(prop)}; ` +
+          `stubExtensionContext: tool under test unexpectedly read ctx.${prop}; ` +
             `provide a real fixture for this property or move the assertion out of execute()`,
         );
       },

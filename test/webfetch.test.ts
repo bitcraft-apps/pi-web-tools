@@ -806,11 +806,14 @@ describe("DNS-rebinding guard (issue #64)", () => {
   // silently dropped, dns.lookup would still get called by undici's default
   // connector, the request would still fail (because we stub dns to a blocked
   // address), but `hookSpy` would have zero calls. See ssrf-agent.ts header.
-  // Saved before any test mocks `global.fetch`. Used by the rebind-redirect
-  // test below to forward hop 2 to the real undici fetch (so ssrfAgent's
-  // lookup hook actually runs and we exercise the connect-time recheck).
-  // The top-level `vi.unstubAllGlobals()` afterEach restores `global.fetch`
-  // between tests, so we don't need a second per-describe restore.
+  // Saved before any test mocks `global.fetch` so the rebind-redirect test
+  // below can forward hop 2 to the real undici fetch (so ssrfAgent's lookup
+  // hook actually runs and we exercise the connect-time recheck).
+  //
+  // We do NOT need this for restoration: the top-level `vi.unstubAllGlobals()`
+  // afterEach already restores `global.fetch` between tests, and
+  // `vi.stubGlobal` snapshots the pre-stub value internally. This binding
+  // exists solely to forward hop 2.
   const originalFetch = global.fetch;
   let hookSpy: ReturnType<typeof vi.fn<typeof lookupHook>>;
   beforeEach(() => {

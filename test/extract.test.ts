@@ -76,7 +76,7 @@ describe("detectExtractor", () => {
     expect(await detectExtractor()).toBe("trafilatura");
     // rdrview should not have been probed (short-circuit on first hit)
     const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "which");
-    expect(whichCalls.map((c: any[]) => c[1][0])).toEqual(["trafilatura"]);
+    expect(whichCalls.map((c) => c[1][0])).toEqual(["trafilatura"]);
   });
 
   it("falls back to rdrview when trafilatura is missing", async () => {

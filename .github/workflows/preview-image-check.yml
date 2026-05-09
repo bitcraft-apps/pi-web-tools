@@ -1,0 +1,44 @@
+name: preview-image-check
+
+# pi.image in package.json is pinned to a raw.githubusercontent.com URL
+# on `main`. A future force-push, rename, or repo move would 404 the
+# gallery thumbnail at https://pi.dev/packages and we'd only notice
+# when someone visits the page. This job HEADs the URL so a break
+# fails CI loudly instead of silently.
+#
+# Trigger surface kept small: on pushes to main (catches local screwups
+# the moment they land) and on a weekly schedule (catches infra-side
+# breakage like raw.githubusercontent.com outages or asset renames
+# done outside this repo).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "package.json"
+      - ".github/preview.png"
+      - ".github/workflows/preview-image-check.yml"
+  schedule:
+    # Mondays 09:00 UTC. Weekly is enough — the asset rarely moves.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  head-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: HEAD pi.image URL
+        run: |
+          set -euo pipefail
+          url=$(node -e 'console.log(require("./package.json").pi.image)')
+          echo "checking: $url"
+          # -L follows redirects; -f makes 4xx/5xx exit non-zero.
+          # --retry covers transient raw.githubusercontent.com hiccups.
+          curl -fsSLI --retry 3 --retry-delay 5 --max-time 20 "$url" >/dev/null
+          echo "ok"

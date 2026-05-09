@@ -17,7 +17,7 @@ Prereqs:
 - [`freeze`](https://github.com/charmbracelet/freeze) on PATH
   (`brew install charmbracelet/tap/freeze`)
 - [`ddgr`](https://github.com/jarun/ddgr) on PATH (`brew install ddgr`)
-- Node ≥ 20 with `tsx` available
+- Node ≥ 20
 
 The capture script imports `.ts` source directly (e.g.
 `../../src/websearch.ts`). `tsx` resolves those imports; plain
@@ -33,7 +33,10 @@ freeze --config .github/preview/freeze.json \
        --output .github/preview.png \
        .github/preview/websearch-output.ans
 
-# 3. Commit both
+# 3. Sanity-check both files were updated before committing.
+# `freeze` can fail silently and leave a stale PNG paired with a
+# fresh fixture, so eyeball `git status` first.
+git status .github/preview/websearch-output.ans .github/preview.png
 git add .github/preview/websearch-output.ans .github/preview.png
 git commit -m "chore(gallery): refresh preview asset"
 ```

@@ -6,14 +6,28 @@ name: preview-image-check
 # when someone visits the page. This job HEADs the URL so a break
 # fails CI loudly instead of silently.
 #
-# Trigger surface kept small: on pushes to main (catches local screwups
-# the moment they land) and on a weekly schedule (catches infra-side
-# breakage like raw.githubusercontent.com outages or asset renames
-# done outside this repo).
+# Trigger surface:
+#   - push to main: catches local screwups the moment they land.
+#   - pull_request touching package.json or .github/preview.png: catches
+#     a bad pi.image edit *before* it merges. Note the URL is fetched
+#     from the PR branch's package.json, but the PNG itself is read
+#     from raw.githubusercontent.com on `main` — i.e. for a PR that
+#     only renames the PNG without touching pi.image, the HEAD will
+#     still resolve to the old (pre-merge) main asset and pass. That
+#     residual gap is covered by the post-merge push trigger and the
+#     weekly cron below.
+#   - schedule (weekly): catches infra-side breakage like
+#     raw.githubusercontent.com outages or asset renames done outside
+#     this repo.
 
 on:
   push:
     branches: [main]
+    paths:
+      - "package.json"
+      - ".github/preview.png"
+      - ".github/workflows/preview-image-check.yml"
+  pull_request:
     paths:
       - "package.json"
       - ".github/preview.png"

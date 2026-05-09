@@ -17,34 +17,40 @@ const LIMIT = 5;
 // Minimal ANSI theme. `freeze` reads ANSI SGR codes and turns them
 // into colored spans in the rendered PNG.
 //
-// Roles must cover every theme.fg(role, …) call reachable from the
-// formatters this script invokes. Today that's formatWebsearchResult,
-// which only touches accent/dim/success/warning/error. If a new
-// formatter is wired in below and it reaches for a role missing from
-// SGR.fg, the fg() wrapper throws — drift fails loudly instead of
-// degrading the fixture.
+// `SGR.fg` is declaratively typed `Partial<Record<ThemeColor, string>>`
+// (no cast). That gives two compile-time guarantees inside this file:
+//   1. SGR.fg keys must be valid ThemeColor names — typos like
+//      `dimm:` fail tsc here, not at capture time.
+//   2. Indexing `SGR.fg[role]` returns `string | undefined`, forcing
+//      the runtime `code === undefined` guard below to stay honest.
+// (Typos in src/* are caught by src/*'s own tsc against the real
+// Theme contract; that's not this file's job.)
+const SGR_FG: Partial<Record<ThemeColor, string>> = {
+  accent: "\x1b[38;5;39m", // bright cyan-blue, links/titles
+  dim: "\x1b[38;5;245m", // gray, urls
+  success: "\x1b[38;5;42m", // green, ✓ header
+  warning: "\x1b[38;5;214m",
+  error: "\x1b[38;5;203m",
+};
+
 const SGR = {
   reset: "\x1b[0m",
   bold: "\x1b[1m",
   dim: "\x1b[2m",
-  fg: {
-    accent: "\x1b[38;5;39m", // bright cyan-blue, links/titles
-    dim: "\x1b[38;5;245m", // gray, urls
-    success: "\x1b[38;5;42m", // green, ✓ header
-    warning: "\x1b[38;5;214m",
-    error: "\x1b[38;5;203m",
-  },
 } as const;
 
+// Roles must cover every theme.fg(role, …) call reachable from the
+// formatters this script invokes. Today that's formatWebsearchResult,
+// which only touches accent/dim/success/warning/error. If a new
+// formatter is wired in below and it reaches for a role missing from
+// SGR_FG, the fg() wrapper throws — drift fails loudly instead of
+// degrading the fixture.
 const theme = {
-  // `role: ThemeColor` (not `string`) keeps this signature in sync with
-  // the real Theme contract, so a typo in src/websearch.ts like
-  // `theme.fg("dimm", …)` fails at tsc instead of at capture time.
   fg(role: ThemeColor, text: string) {
-    const code = (SGR.fg as Partial<Record<ThemeColor, string>>)[role];
+    const code = SGR_FG[role];
     if (code === undefined) {
       throw new Error(
-        `capture.ts theme: unknown role "${role}". Add it to SGR.fg or update the formatter.`,
+        `capture.ts theme: unknown role "${role}". Add it to SGR_FG or update the formatter.`,
       );
     }
     return `${code}${text}${SGR.reset}`;
@@ -54,17 +60,8 @@ const theme = {
   },
 };
 
-let results;
-try {
-  results = await runDdgr(QUERY, LIMIT, { safesearch: "moderate" });
-} catch (err) {
-  const msg = err instanceof Error ? err.message : String(err);
-  console.error(
-    `capture.ts: runDdgr failed: ${msg}\n` +
-      `Make sure ddgr is on PATH (brew install ddgr / pipx install ddgr).`,
-  );
-  process.exit(1);
-}
+// Top-level await; any throw exits non-zero with a stack trace via tsx.
+const results = await runDdgr(QUERY, LIMIT, { safesearch: "moderate" });
 
 const rendered = formatWebsearchResult(
   {

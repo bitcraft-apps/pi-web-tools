@@ -1,0 +1,21 @@
+[38;5;42m✓ 5 results for "pi coding agent"[0m
+
+1. [38;5;39mPi Coding Agent[0m
+   [38;5;245mhttps://pi.dev/[0m
+   Pi is a minimal terminal coding harness. Adapt Pi to your workflows, not the other way around. Customize Pi with extensions, skills, prompt templates, and themes. Bundle them as Pi packages and share via npm or git. Pi ships with powerful d
+
+2. [38;5;39mpi-mono/packages/coding-agent at main - GitHub[0m
+   [38;5;245mhttps://github.com/badlogic/pi-mono/tree/main/packages/coding-agent[0m
+   Share your OSS coding agent sessions If you use pi for open source work, please share your coding agent sessions. Public OSS session data helps improve models, prompts, tools, and evaluations using real development workflows. For the full e
+
+3. [38;5;39mpi-coding-agent: Coding Agent CLI | badlogic/pi-mono | DeepWiki[0m
+   [38;5;245mhttps://deepwiki.com/badlogic/pi-mono/4-pi-coding-agent:-coding-agent-cli[0m
+   The coding agent is built around AgentSession, which orchestrates the agent lifecycle, and supports four operational modes: interactive (full TUI), print (single-shot CLI), RPC (JSON protocol over stdio), and programmatic SDK usage.
+
+4. [38;5;39mPi Coding Agent Setup Guide: Install, Configure Models, and Best Extensions[0m
+   [38;5;245mhttps://www.bitdoze.com/pi-coding-agent-setup-guide/[0m
+   Step-by-step guide to installing Pi coding agent, connecting cheap models like MiniMax M2.7 and Qwen 3.6, and setting up the most useful extensions. Covers LazyPi one-command setup and the Rust port alternative.
+
+5. [38;5;39mHow to Build a Custom Agent Framework with PI: The Agent Stack Powering ...[0m
+   [38;5;245mhttps://nader.substack.com/p/how-to-build-a-custom-agent-framework[0m
+   It's a monorepo of packages that layer on top of each other: pi-ai handles LLM communication across providers, pi-agent-core adds the agent loop with tool calling, pi-coding-agent gives you a full coding agent with built-in tools, session p

@@ -37,6 +37,10 @@ Prereqs:
 - [`freeze`](https://github.com/charmbracelet/freeze) on PATH
   (`brew install charmbracelet/tap/freeze`)
 - [`ddgr`](https://github.com/jarun/ddgr) on PATH (`brew install ddgr`)
+- [`pngquant`](https://pngquant.org/) on PATH (`brew install pngquant` /
+  `apt install pngquant`) — lossy palette quantize, takes the raw
+  freeze output from ~450KB to ~50KB with no perceptible loss on
+  terminal screenshots
 - Node ≥ 20
 
 The capture script imports `.ts` source directly (e.g.

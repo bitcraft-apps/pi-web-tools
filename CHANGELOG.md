@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.0.0...v1.1.0) (2026-05-09)
+
+
+### Features
+
+* **webfetch:** custom TUI renderer (renderCall + renderResult) ([#111](https://github.com/bitcraft-apps/pi-web-tools/issues/111)) ([bca6a83](https://github.com/bitcraft-apps/pi-web-tools/commit/bca6a83b26d3579966556f7fe02e2a111619c84c))
+* **websearch:** custom TUI renderer (renderCall + renderResult) ([#108](https://github.com/bitcraft-apps/pi-web-tools/issues/108)) ([e829a6e](https://github.com/bitcraft-apps/pi-web-tools/commit/e829a6e03cd48d31489cb64d86525a5a8af79c78))
+
 ## [1.0.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v0.4.1...v1.0.0) (2026-05-08)
 
 

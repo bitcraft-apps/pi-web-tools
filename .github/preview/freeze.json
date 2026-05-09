@@ -1,0 +1,24 @@
+{
+  "background": "#171717",
+  "margin": [0, 0, 0, 0],
+  "padding": [40, 60, 40, 60],
+  "font": {
+    "family": "JetBrains Mono",
+    "size": 18,
+    "ligatures": true
+  },
+  "line_height": 1.3,
+  "wrap": 110,
+  "border": {
+    "radius": 0,
+    "width": 0
+  },
+  "shadow": {
+    "blur": 0,
+    "x": 0,
+    "y": 0
+  },
+  "window": false,
+  "width": 1280,
+  "height": 720
+}

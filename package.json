@@ -5,6 +5,8 @@
   "type": "module",
   "main": "./index.ts",
   "license": "MIT",
+  "homepage": "https://github.com/bitcraft-apps/pi-web-tools",
+  "bugs": "https://github.com/bitcraft-apps/pi-web-tools/issues",
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -14,7 +16,8 @@
   "pi": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/bitcraft-apps/pi-web-tools/main/.github/preview.png"
   },
   "files": [
     "index.ts",

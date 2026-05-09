@@ -1,5 +1,7 @@
 # @bitcraft-apps/pi-web-tools
 
+<img src=".github/preview.png" alt="websearch preview" width="720">
+
 Shell-only web search and fetch tools for [pi.dev](https://pi.dev). **Zero API keys, zero accounts** — just `ddgr` + `pandoc`/`w3m` running locally.
 
 ## Tools

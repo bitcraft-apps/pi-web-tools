@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import {
   formatWebfetchCall,
   formatWebfetchResult,
+  WEBFETCH_PREVIEW_MAX_LINE_CHARS,
   WEBFETCH_PREVIEW_MAX_LINES,
   type WebfetchToolDetails,
 } from "../src/webfetch.js";
@@ -10,10 +11,12 @@ import { stubTheme } from "./_helpers/theme.js";
 
 const theme = stubTheme();
 
-// Arbitrary placeholder — formatter is opaque to the actual value; the
-// real `keyHint("app.tools.expand", ...)` call site is exercised in the
+// Obviously-fake sentinel so a future reader doesn't grep for a
+// plausible-looking keybinding (e.g. "Ctrl+E") and assume it's the real
+// one. The formatter is opaque to the value; the live
+// `keyHint("app.tools.expand", ...)` call site is exercised in the
 // integration block below.
-const EXPAND_HINT = "Ctrl+E";
+const EXPAND_HINT = "<EXPAND>";
 
 const SAMPLE_BODY = ["# Title", "", "First paragraph.", "", "Second paragraph."].join("\n");
 const SAMPLE_DETAILS: WebfetchToolDetails = {
@@ -68,8 +71,9 @@ describe("formatWebfetchResult", () => {
     );
     // Query string is intentionally stripped from the collapsed header so
     // tokens/sigs in `?token=...` etc. don't leak into scrollback.
-    // Body has 5 lines (4 newlines + trailing partial); expect "5 lines".
-    expect(out).toMatch(/^✓ fetched example\.com\/path \(\d+B, ~5 lines\) \(Ctrl\+E\)$/);
+    // Body is exactly 44 bytes / 5 newline-separated segments — assert
+    // the exact size so an off-by-one in the byte/line math fails loud.
+    expect(out).toBe("✓ fetched example.com/path (44B, 5 lines) (<EXPAND>)");
     expect(out).not.toContain("?x=1");
   });
 
@@ -124,6 +128,32 @@ describe("formatWebfetchResult", () => {
     expect(lines.at(-1)).toBe("… +50 more lines (full content was sent to the model)");
   });
 
+  it("expanded view caps individual line width to bound horizontal blast radius", () => {
+    // Single short line + one pathologically long line (think minified
+    // JSON / single-line HTML). The long line must be sliced to
+    // WEBFETCH_PREVIEW_MAX_LINE_CHARS + an ellipsis so a 50KB line can't
+    // flood the terminal even when the line *count* is well under cap.
+    const longLine = "x".repeat(WEBFETCH_PREVIEW_MAX_LINE_CHARS + 1000);
+    const body = `short\n${longLine}`;
+    const out = formatWebfetchResult(
+      {
+        details: { url: "https://e.test/", chars: body.length },
+        body,
+        expanded: true,
+        isError: false,
+        expandHint: EXPAND_HINT,
+      },
+      theme,
+    );
+    const lines = out.split("\n");
+    // header + 2 body lines, no truncation footer (under line-count cap).
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toBe("short");
+    const long = lines[2];
+    expect(long).toBe("x".repeat(WEBFETCH_PREVIEW_MAX_LINE_CHARS) + "…");
+    expect(long?.length).toBe(WEBFETCH_PREVIEW_MAX_LINE_CHARS + 1);
+  });
+
   it("error path uses ✗ and the error text", () => {
     expect(
       formatWebfetchResult(
@@ -168,7 +198,7 @@ describe("formatWebfetchResult", () => {
     );
     // No URL → just the parenthesized stats; no crash.
     expect(out).toContain("2 lines");
-    expect(out).toContain("Ctrl+E");
+    expect(out).toContain("<EXPAND>");
   });
 
   it("size formatting follows the read tool convention (B/KB/MB)", () => {

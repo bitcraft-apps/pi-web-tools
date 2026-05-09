@@ -449,6 +449,18 @@ export interface WebfetchCallArgs {
 export const WEBFETCH_PREVIEW_MAX_LINES = 200;
 
 /**
+ * Per-line character cap for the expanded preview. Bounds horizontal
+ * blast radius the way `WEBFETCH_PREVIEW_MAX_LINES` bounds vertical:
+ * a 200-line response where every line is 50KB (minified JSON, single-
+ * line HTML that slipped past extraction) would still flood the
+ * terminal without this. 500 fits a wide-terminal paragraph and most
+ * "one log line per record" outputs; tune if real reports show it
+ * cutting useful content. Lines over the cap are sliced with a single
+ * … — the model still received the full content, see footer.
+ */
+export const WEBFETCH_PREVIEW_MAX_LINE_CHARS = 500;
+
+/**
  * Format a byte count using the same B/KB/MB convention as the
  * built-in `read` tool's `formatSize` (see
  * `node_modules/@mariozechner/pi-coding-agent/dist/core/tools/truncate.js`).
@@ -498,6 +510,15 @@ function countLines(body: string): number {
  * `max_chars` is shown muted only when the user (LLM) overrode the
  * default — default invocations stay compact. Mirrors
  * `formatWebsearchCall`'s convention.
+ *
+ * Security note: the URL is shown verbatim (including query string),
+ * which mirrors the user/LLM's own input rather than derived display.
+ * `shortDisplayUrl` strips `?...` from the *result* header to avoid
+ * leaking secrets carried in query params (`?token=`, `?sig=`, signed
+ * requests, etc.) into scrollback. The asymmetry is intentional: the
+ * call header echoes what the agent already typed, the result header
+ * is a new surface where redaction is cheap. Don't "fix" one to match
+ * the other without re-reading both notes.
  */
 export function formatWebfetchCall(
   args: WebfetchCallArgs | undefined,
@@ -559,9 +580,14 @@ export function formatWebfetchResult(
   // the error path where there is no `details`). `chars` is deliberately
   // not used here — it's JS string length and undercounts non-ASCII
   // pages by ~half.
-  const sizeBytes = details?.bytes ?? Buffer.byteLength(body, "utf-8");
+  // utf-8 is Buffer.byteLength's default encoding — omitted for clarity.
+  const sizeBytes = details?.bytes ?? Buffer.byteLength(body);
   const lineCount = countLines(body);
-  const stats = `(${formatSize(sizeBytes)}, ~${lineCount} lines)`;
+  // No tilde: `lineCount` is an exact count of newline-separated segments
+  // in the body we actually have. `body` may itself be truncated upstream
+  // by `max_chars`, but that truncation is already reflected in `body` —
+  // the count over what we hold is exact, not approximate.
+  const stats = `(${formatSize(sizeBytes)}, ${lineCount} lines)`;
   const headerBody = display ? `✓ fetched ${display} ${stats}` : `✓ fetched ${stats}`;
   const header = theme.fg("success", headerBody);
 
@@ -571,9 +597,21 @@ export function formatWebfetchResult(
 
   if (lineCount === 0) return header;
 
-  const lines = body.split("\n");
+  // Per-line cap: WEBFETCH_PREVIEW_MAX_LINES bounds vertical scrollback,
+  // but a 200-line page where each line is 50KB (minified JSON, single-
+  // line HTML that slipped past extraction) still floods the terminal
+  // horizontally. 500 chars is plenty to skim a wrapped paragraph or a
+  // shell-friendly JSON line; longer lines get an ellipsis so the user
+  // knows content was elided for *this view*. Full content still went to
+  // the model — see footer.
+  const capLine = (line: string): string =>
+    line.length > WEBFETCH_PREVIEW_MAX_LINE_CHARS
+      ? line.slice(0, WEBFETCH_PREVIEW_MAX_LINE_CHARS) + "…"
+      : line;
+  const rawLines = body.split("\n");
+  const lines = rawLines.map(capLine);
   if (lines.length <= WEBFETCH_PREVIEW_MAX_LINES) {
-    return `${header}\n${body}`;
+    return `${header}\n${lines.join("\n")}`;
   }
   const preview = lines.slice(0, WEBFETCH_PREVIEW_MAX_LINES).join("\n");
   const remaining = lines.length - WEBFETCH_PREVIEW_MAX_LINES;

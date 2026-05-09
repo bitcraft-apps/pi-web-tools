@@ -34,6 +34,14 @@ describe("formatWebfetchCall", () => {
     );
   });
 
+  it("includes max_chars=0 even though execute will truncate to empty", () => {
+    // 0 is a non-default override — user needs to see *why* the fetch
+    // came back empty, not have it silently hidden.
+    expect(formatWebfetchCall({ url: "https://example.com/", max_chars: 0 }, theme)).toBe(
+      "webfetch https://example.com/ max_chars=0",
+    );
+  });
+
   it("omits max_chars when explicitly set to the default", () => {
     expect(formatWebfetchCall({ url: "https://example.com/", max_chars: 50000 }, theme)).toBe(
       "webfetch https://example.com/",
@@ -41,12 +49,13 @@ describe("formatWebfetchCall", () => {
   });
 
   it("survives missing/garbage args (streaming partials)", () => {
-    expect(formatWebfetchCall(undefined, theme)).toBe("webfetch ");
+    // No URL → no trailing space; matters for copy/paste and snapshot diffs.
+    expect(formatWebfetchCall(undefined, theme)).toBe("webfetch");
   });
 });
 
 describe("formatWebfetchResult", () => {
-  it("collapsed view shows host+path with size+lines and expand hint", () => {
+  it("collapsed view shows host+path with size+lines and expand hint, dropping query", () => {
     const out = formatWebfetchResult(
       {
         details: SAMPLE_DETAILS,
@@ -57,9 +66,11 @@ describe("formatWebfetchResult", () => {
       },
       theme,
     );
-    // size derives from utf-8 byte length of body, lines from newline split.
+    // Query string is intentionally stripped from the collapsed header so
+    // tokens/sigs in `?token=...` etc. don't leak into scrollback.
     // Body has 5 lines (4 newlines + trailing partial); expect "5 lines".
-    expect(out).toMatch(/^✓ fetched example\.com\/path\?x=1 \(\d+B, ~5 lines\) \(Ctrl\+E\)$/);
+    expect(out).toMatch(/^✓ fetched example\.com\/path \(\d+B, ~5 lines\) \(Ctrl\+E\)$/);
+    expect(out).not.toContain("?x=1");
   });
 
   it("collapsed view falls back to details.url when host parse fails", () => {
@@ -173,6 +184,23 @@ describe("formatWebfetchResult", () => {
       theme,
     );
     expect(out).toContain("2.0KB");
+  });
+
+  it("prefers details.bytes over recomputing from body", () => {
+    // Pin a fake byte count distinct from the body's real utf-8 length so
+    // we can prove the renderer is using the cached value, not recomputing.
+    const out = formatWebfetchResult(
+      {
+        details: { url: "https://e.test/", chars: 5, bytes: 4096 },
+        body: "hello",
+        expanded: false,
+        isError: false,
+        expandHint: EXPAND_HINT,
+      },
+      theme,
+    );
+    expect(out).toContain("4.0KB");
+    expect(out).not.toContain("5B");
   });
 });
 

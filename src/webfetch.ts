@@ -418,6 +418,14 @@ export interface WebfetchToolDetails {
   url: string;
   /** Length of the LLM-facing markdown body in JS string units (not bytes). */
   chars: number;
+  /**
+   * UTF-8 byte length of the LLM-facing markdown body. Computed once in
+   * `execute()` so the renderer is a pure lookup — no Buffer.byteLength on
+   * every redraw. Optional because sessions persisted by older versions of
+   * this tool didn't carry it; the renderer falls back to recomputing from
+   * `body` when missing.
+   */
+  bytes?: number;
 }
 
 export interface WebfetchCallArgs {
@@ -456,18 +464,19 @@ function formatSize(bytes: number): string {
 
 /**
  * Compact display form of `url` for the collapsed result header:
- * `<host><pathname><search>`. Strips scheme (always http/https — see
- * url-guard) and userinfo, omits hash. Falls back to the raw string
- * when parsing fails so a malformed URL still renders something
- * recognizable instead of an empty header. Caller is responsible for
- * any sanitization — the URL went through `validateUrl` in `execute()`,
- * but `details` may have come from a session persisted by an older
- * version that didn't.
+ * `<host><pathname>`. Strips scheme (always http/https — see url-guard),
+ * userinfo, query, and hash. Query is dropped because URLs routinely
+ * carry secrets in `?token=...`, `?sig=...`, signed-request params, etc.,
+ * and the collapsed header lands in chat scrollback / session exports.
+ * The full URL (with query) is still shown in `renderCall` — that's the
+ * user/LLM's own input, not derived display. Falls back to the raw
+ * string when parsing fails so a malformed URL still renders something
+ * recognizable instead of an empty header.
  */
 function shortDisplayUrl(url: string): string {
   try {
     const u = new URL(url);
-    return `${u.host}${u.pathname}${u.search}`;
+    return `${u.host}${u.pathname}`;
   } catch {
     return url;
   }
@@ -496,12 +505,15 @@ export function formatWebfetchCall(
 ): string {
   const url = typeof args?.url === "string" ? args.url : "";
   let text = theme.fg("toolTitle", theme.bold("webfetch"));
-  text += " " + theme.fg("accent", url);
-  if (
-    typeof args?.max_chars === "number" &&
-    args.max_chars > 0 &&
-    args.max_chars !== MAX_CHARS_DEFAULT
-  ) {
+  // Only emit the URL segment when we actually have one — otherwise the
+  // header ends with a trailing space that's invisible on render but
+  // shows up in copy/paste and snapshot diffs.
+  if (url) text += " " + theme.fg("accent", url);
+  // Show max_chars whenever the LLM explicitly passed a non-default value,
+  // including 0 — `execute` will then truncate to 0 and the user needs to
+  // see *why* the fetch came back empty. The default-value check keeps
+  // headers compact for the common path.
+  if (typeof args?.max_chars === "number" && args.max_chars !== MAX_CHARS_DEFAULT) {
     text += " " + theme.fg("muted", `max_chars=${args.max_chars}`);
   }
   return text;
@@ -540,11 +552,14 @@ export function formatWebfetchResult(
   }
 
   const display = details?.url ? shortDisplayUrl(details.url) : "";
-  // Byte count from utf-8 encoding (not `chars` from details — `chars`
-  // is JS string length and undercounts non-ASCII pages by ~half). The
-  // body is always available via `result.content[0].text`, so we don't
-  // need to depend on `details.chars` for this stat.
-  const sizeBytes = Buffer.byteLength(body, "utf-8");
+  // Byte count is computed once in `execute()` and stashed on `details`
+  // (see WebfetchToolDetails.bytes) so this renderer is a pure lookup —
+  // no Buffer.byteLength on every redraw. Fall back to recomputing from
+  // `body` when `details.bytes` is missing (older persisted sessions, or
+  // the error path where there is no `details`). `chars` is deliberately
+  // not used here — it's JS string length and undercounts non-ASCII
+  // pages by ~half.
+  const sizeBytes = details?.bytes ?? Buffer.byteLength(body, "utf-8");
   const lineCount = countLines(body);
   const stats = `(${formatSize(sizeBytes)}, ~${lineCount} lines)`;
   const headerBody = display ? `✓ fetched ${display} ${stats}` : `✓ fetched ${stats}`;
@@ -579,7 +594,7 @@ export const webfetchTool = defineTool<typeof webfetchSchema, WebfetchToolDetail
     const md = await fetchAsMarkdown({ url: params.url, max_chars: params.max_chars });
     return {
       content: [{ type: "text", text: md }],
-      details: { url: params.url, chars: md.length },
+      details: { url: params.url, chars: md.length, bytes: Buffer.byteLength(md, "utf-8") },
     };
   },
 

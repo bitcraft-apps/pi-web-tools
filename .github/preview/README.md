@@ -12,15 +12,21 @@
 
 ## Regen
 
-Prereqs: [`freeze`](https://github.com/charmbracelet/freeze) on PATH
-(`brew install charmbracelet/tap/freeze`) and Node ≥ 20 with `tsx`
-available (the capture script imports `.ts` source through pi's
-`.js`-suffixed re-exports, which `tsx` resolves but plain
-`node --experimental-strip-types` does not).
+Prereqs:
+
+- [`freeze`](https://github.com/charmbracelet/freeze) on PATH
+  (`brew install charmbracelet/tap/freeze`)
+- [`ddgr`](https://github.com/jarun/ddgr) on PATH (`brew install ddgr`)
+- Node ≥ 20 with `tsx` available
+
+The capture script imports `.ts` source directly (e.g.
+`../../src/websearch.ts`). `tsx` resolves those imports; plain
+`node` (even with `--experimental-strip-types`) does not, because the
+imports use the `.ts` extension rather than a `.js` shim.
 
 ```bash
 # 1. Recapture the fixture (hits live ddgr)
-npx -y tsx .github/preview/capture.mjs
+npx -y tsx .github/preview/capture.ts
 
 # 2. Re-render the PNG
 freeze --config .github/preview/freeze.json \

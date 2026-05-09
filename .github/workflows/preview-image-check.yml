@@ -3,22 +3,29 @@ name: preview-image-check
 # pi.image in package.json is pinned to a raw.githubusercontent.com URL
 # on `main`. A future force-push, rename, or repo move would 404 the
 # gallery thumbnail at https://pi.dev/packages and we'd only notice
-# when someone visits the page. This job HEADs the URL so a break
-# fails CI loudly instead of silently.
+# when someone visits the page. This workflow guards against that in
+# two complementary ways:
 #
-# Trigger surface:
-#   - push to main: catches local screwups the moment they land.
-#   - pull_request touching package.json or .github/preview.png: catches
-#     a bad pi.image edit *before* it merges. Note the URL is fetched
-#     from the PR branch's package.json, but the PNG itself is read
-#     from raw.githubusercontent.com on `main` — i.e. for a PR that
-#     only renames the PNG without touching pi.image, the HEAD will
-#     still resolve to the old (pre-merge) main asset and pass. That
-#     residual gap is covered by the post-merge push trigger and the
-#     weekly cron below.
-#   - schedule (weekly): catches infra-side breakage like
-#     raw.githubusercontent.com outages or asset renames done outside
-#     this repo.
+#   1. tree-check (pull_request)
+#      Verifies the file path implied by pi.image exists in the PR's
+#      working tree. No network: the PR branch's PNG isn't on
+#      raw.githubusercontent.com yet, so HEADing main here would
+#      either pass on stale state (PR renames the file but pi.image
+#      still points at the old URL — old URL still 200s pre-merge) or
+#      fail spuriously (PR introduces the file for the first time —
+#      main 404s until merge). The tree check sidesteps both.
+#
+#   2. head-check (push to main, weekly schedule, manual)
+#      Live HEAD against the published URL. Catches:
+#        - local screwups the moment they land on main
+#        - infra-side breakage like raw.githubusercontent.com outages
+#          or asset renames done outside this repo
+#
+# Residual gap: a PR that renames the PNG file without updating
+# pi.image will pass tree-check (file exists at new path) and pass
+# head-check pre-merge (old URL still resolves on main), then fail
+# head-check immediately post-merge. Acceptable: the failure is loud
+# and lands within minutes of the merge.
 
 on:
   push:
@@ -41,7 +48,44 @@ permissions:
   contents: read
 
 jobs:
+  # PR-only: verify the PNG exists in the tree at the path implied by
+  # pi.image. Doesn't hit the network — the PR branch's asset isn't
+  # published yet. Sole purpose is catching pi.image edits that point
+  # at a path that doesn't exist in the same PR.
+  tree-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Verify pi.image points at a tracked file
+        run: |
+          set -euo pipefail
+          url=$(node -e 'console.log(require("./package.json").pi.image)')
+          echo "pi.image: $url"
+          # Strip the raw.githubusercontent.com/<owner>/<repo>/<ref>/
+          # prefix so we get the repo-relative path. Anchored regex —
+          # if the URL shape ever changes (e.g. someone switches to a
+          # CDN), this fails loudly rather than silently mis-checking.
+          path=$(printf '%s' "$url" | sed -nE 's|^https://raw\.githubusercontent\.com/[^/]+/[^/]+/[^/]+/(.+)$|\1|p')
+          if [ -z "$path" ]; then
+            echo "ERROR: pi.image does not match the expected raw.githubusercontent.com URL shape." >&2
+            echo "       Got: $url" >&2
+            exit 1
+          fi
+          echo "expected tree path: $path"
+          if [ ! -f "$path" ]; then
+            echo "ERROR: pi.image points at $path but no such file exists in the PR tree." >&2
+            exit 1
+          fi
+          echo "ok"
+
+  # Post-merge / scheduled: actually HEAD the published URL. This is
+  # what catches force-pushes, file renames done outside this repo,
+  # and raw.githubusercontent.com outages.
   head-check:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

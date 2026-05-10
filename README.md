@@ -1,13 +1,20 @@
 # @bitcraft-apps/pi-web-tools
 
-<img src=".github/preview.png" alt="websearch preview" width="720">
-
 Shell-only web search and fetch tools for [pi.dev](https://pi.dev). **Zero API keys, zero accounts** — just `ddgr` + `pandoc`/`w3m` running locally.
 
 ## Tools
 
-- **`websearch`** — DuckDuckGo search via [`ddgr`](https://github.com/jarun/ddgr). Returns up to 25 results with title, URL, snippet.
-- **`webfetch`** — `fetch` + optional content-extraction pre-pass + HTML→markdown via `pandoc` (preferred) or `w3m` (fallback). Auto-handles Cloudflare challenges via UA hack. Blocks SSRF (localhost/RFC1918). See [Content extraction](#content-extraction-optional).
+### `websearch`
+
+<img src=".github/preview.png" alt="websearch screenshot: results for the query 'pi coding agent'" width="720">
+
+DuckDuckGo search via [`ddgr`](https://github.com/jarun/ddgr). Returns up to 25 results with title, URL, snippet.
+
+### `webfetch`
+
+<img src=".github/webfetch.png" alt="webfetch screenshot: rendered markdown of the Unix philosophy Wikipedia article" width="720">
+
+`fetch` + optional content-extraction pre-pass + HTML→markdown via `pandoc` (preferred) or `w3m` (fallback). Auto-handles Cloudflare challenges via UA hack. Blocks SSRF (localhost/RFC1918). See [Content extraction](#content-extraction-optional).
 
 ## Install
 

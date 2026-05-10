@@ -1,0 +1,24 @@
+[38;5;42m✓ fetched en.wikipedia.org/wiki/Unix_philosophy (14.2KB, 196 lines)[0m
+# Unix philosophy
+
+The Unix philosophy, originated by Ken Thompson, is a set of cultural norms and philosophical approaches to minimalist, modular software development. It is based on the experience of leading developers of the Unix operating system. Early Unix developers were important in bringing the concepts of modularity and reusability into software engineering practice, spawning a "software tools" movement. Over time, the leading developers of Unix (and programs that ran on it) established a set of cultural …
+
+The Unix philosophy emphasizes building simple, compact, clear, modular, and extensible code that can be easily maintained and repurposed by developers other than its creators. The Unix philosophy favors composability as opposed to monolithic design.
+
+## Origin
+
+\[edit\]
+
+In their Unix paper of 1974, Ritchie and Thompson quote the following design considerations:\[1\]
+
+- Make it easy to write, test, and run programs.
+- Interactive use instead of batch processing.
+- Economy and elegance of design due to size constraints ("salvation through suffering").
+- Self-supporting system: all Unix software is maintained under Unix.
+
+In 1978, Doug McIlroy documented a set of principles encapsulating the "characteristic style" that had emerged among Unix system users and developers:\[2\]\[3\]
+
+- Make each program do one thing well. To do a new job, build afresh rather than complicate old programs by adding new "features".
+- Expect the output of every program to become the input to another, as yet unknown, program. Don't clutter output with extraneous information. Avoid stringently columnar or binary input formats. Don't insist on interactive input.
+- Design and build software, even operating systems, to be tried early, ideally within weeks. Don't hesitate to throw away the clumsy parts and rebuild them.
+- Use tools in preference to unskilled help to lighten a programming task, even if you have to detour to build the tools and expect to throw some of them out after you've finished using them.

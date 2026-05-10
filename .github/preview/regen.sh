@@ -103,5 +103,5 @@ done
 
 echo
 echo "Next:"
-echo "  git add ${regenerated[*]}"
+echo "  git add ${regenerated[*]:-}"
 echo "  git commit -m 'chore(preview): refresh assets'"

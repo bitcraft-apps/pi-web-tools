@@ -84,7 +84,14 @@ const truncated = lines.length > MAX_LINES ? lines.slice(0, MAX_LINES).join("\n"
 
 const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, "webfetch-output.ans");
-writeFileSync(out, truncated + "\n", "utf8");
+// Normalize to exactly one trailing newline. The truncated path's
+// `slice().join("\n")` can already end in `\n` when the 25th slice
+// element is the empty tail from rendered's terminating newline; the
+// non-truncated path's `rendered` always ends in `\n`. Without this
+// guard the old code appended a second `\n` and the fixture drifted
+// on every regen.
+const final = truncated.endsWith("\n") ? truncated : truncated + "\n";
+writeFileSync(out, final, "utf8");
 console.log(
   `wrote ${out} (${truncated.length} chars, ${Math.min(lines.length, MAX_LINES)} lines)`,
 );

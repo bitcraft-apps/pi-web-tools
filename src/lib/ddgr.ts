@@ -28,10 +28,17 @@ export function parseOutput(stdout: string, limit: number): DdgrResult[] {
 }
 
 export type SafeSearch = "off" | "moderate" | "strict";
+export type TimeFilter = "d" | "w" | "m" | "y";
 
 export interface RunDdgrOptions {
   region?: string;
   safesearch?: SafeSearch;
+  /**
+   * Maps to ddgr's `-t/--time`. Restrict results to the past day/week/month/year.
+   * Omitted → no time filter (ddgr default = all time). Validated at the schema
+   * boundary (websearch.ts) so this layer trusts the value.
+   */
+  time?: TimeFilter;
 }
 
 export function buildDdgrArgs(query: string, limit: number, opts: RunDdgrOptions = {}): string[] {
@@ -42,6 +49,11 @@ export function buildDdgrArgs(query: string, limit: number, opts: RunDdgrOptions
   }
   if (opts.safesearch === "off") {
     args.push("--unsafe");
+  }
+  // `--time <bucket>` mirrors `--reg`'s shape: opt-in, no default emitted, value
+  // already validated upstream by the typebox literal union in websearch.ts.
+  if (opts.time) {
+    args.push("--time", opts.time);
   }
   args.push("--", query);
   return args;

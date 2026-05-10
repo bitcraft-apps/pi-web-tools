@@ -1,6 +1,6 @@
 import { Type } from "@mariozechner/pi-ai";
 import { defineTool, keyHint } from "@mariozechner/pi-coding-agent";
-import type { DdgrResult, SafeSearch } from "./lib/ddgr.js";
+import type { DdgrResult, SafeSearch, TimeFilter } from "./lib/ddgr.js";
 import { runDdgr } from "./lib/ddgr.js";
 import { ensureText, type FormatterTheme } from "./lib/render.js";
 
@@ -63,6 +63,7 @@ const LIMIT_DEFAULT = 8;
 const LIMIT_MAX = 25;
 const SAFESEARCH_VALUES = ["off", "moderate", "strict"] as const;
 const SAFESEARCH_DEFAULT: SafeSearch = "moderate";
+const TIME_VALUES = ["d", "w", "m", "y"] as const;
 
 const websearchSchema = Type.Object({
   query: Type.String({ description: "The search query (free-form text)." }),
@@ -86,6 +87,15 @@ const websearchSchema = Type.Object({
         description:
           "Safe search level. 'off' disables it (passes --unsafe to ddgr). 'moderate' (default) and 'strict' both use ddgr's default safe-search behavior; ddgr does not distinguish them.",
         default: SAFESEARCH_DEFAULT,
+      },
+    ),
+  ),
+  time: Type.Optional(
+    Type.Union(
+      TIME_VALUES.map((v) => Type.Literal(v)),
+      {
+        description:
+          "Time filter: 'd' (past day), 'w' (past week), 'm' (past month), 'y' (past year). Default: no filter (all time). Use when the query is time-sensitive ('latest', 'recent', 'this week') — DuckDuckGo's default ranking otherwise surfaces years-old SEO content above recent results.",
       },
     ),
   ),
@@ -118,6 +128,7 @@ export interface WebsearchCallArgs {
   limit?: number;
   region?: string;
   safesearch?: SafeSearch;
+  time?: TimeFilter;
 }
 
 /**
@@ -154,6 +165,12 @@ export function formatWebsearchCall(
     args.safesearch !== SAFESEARCH_DEFAULT
   ) {
     extras.push(`safesearch=${args.safesearch}`);
+  }
+  // No default — the field is opt-in, so any string value the LLM supplied is
+  // by definition non-default and worth surfacing in the muted extras line.
+  // Schema validation already restricted it to TIME_VALUES at the boundary.
+  if (typeof args?.time === "string" && args.time.length > 0) {
+    extras.push(`time=${args.time}`);
   }
   if (extras.length > 0) {
     text += " " + theme.fg("muted", extras.join(" "));
@@ -242,6 +259,7 @@ export const websearchTool = defineTool<typeof websearchSchema, WebsearchToolDet
     const results = await runDdgr(params.query, limit, {
       region: params.region,
       safesearch,
+      time: params.time,
     });
     const payload = { query: params.query, results };
     const details: WebsearchToolDetails = {

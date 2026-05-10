@@ -26,6 +26,17 @@ name: preview-image-check
 # head-check pre-merge (old URL still resolves on main), then fail
 # head-check immediately post-merge. Acceptable: the failure is loud
 # and lands within minutes of the merge.
+#
+# What this workflow does NOT guard:
+#
+# `.github/webfetch.png` is referenced from README.md but not from
+# pi.image. A missing inline README image is self-evident the next
+# time anyone opens the README on GitHub or npm — different failure
+# mode from pi.image (whose breakage is invisible to the maintainer
+# because only pi.dev visitors see it). webfetch.png is included in
+# the `paths:` triggers below so adjacent edits still run the
+# pi.image-focused checks, but no separate HEAD/tree check exists
+# for it. See issue #117 for the decision.
 
 on:
   push:
@@ -33,11 +44,13 @@ on:
     paths:
       - "package.json"
       - ".github/preview.png"
+      - ".github/webfetch.png"
       - ".github/workflows/preview-image-check.yml"
   pull_request:
     paths:
       - "package.json"
       - ".github/preview.png"
+      - ".github/webfetch.png"
       - ".github/workflows/preview-image-check.yml"
   schedule:
     # Mondays 09:00 UTC. Weekly is enough — the asset rarely moves.

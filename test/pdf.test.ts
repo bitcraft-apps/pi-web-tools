@@ -22,7 +22,13 @@ function fakeChild(stdoutText: string, exitCode = 0, stderrText = "") {
   });
   ee.kill = () => {};
   ee.stdout.on("end", () => ee.emit("close", exitCode));
-  setImmediate(() => ee.stdout.resume());
+  setImmediate(() => {
+    ee.stdout.resume();
+    // Symmetric with stdout: force stderr into flowing mode even when no
+    // listener is attached, so Buffer.concat(stderrChunks) in pdf.ts can't
+    // race with `close` on the non-zero-exit path.
+    ee.stderr.resume();
+  });
   return ee;
 }
 
@@ -138,5 +144,85 @@ describe("pdfToText", () => {
     expect(await pdfToText(fakePdf())).toBeNull();
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy.mock.calls[0]![0]).toMatch(/pdftotext failed/i);
+  });
+
+  it("returns null when pdftotext stdout exceeds the byte cap (overflow path)", async () => {
+    // Build a child whose stdout emits >50 MB across two chunks. The first
+    // chunk is under cap; the second pushes us over and trips the overflow
+    // branch, which kills the child and rejects with the cap message.
+    function overflowChild() {
+      const ee: any = new EventEmitter();
+      // 30 MB then 30 MB → 60 MB total, > 50 MB cap. Allocated as zero-fill
+      // Buffers (no real content needed; pdftotext is mocked).
+      const big = Buffer.alloc(30 * 1024 * 1024);
+      ee.stdout = Readable.from([big, big]);
+      ee.stderr = Readable.from([Buffer.alloc(0)]);
+      ee.stdin = new Writable({
+        write(_c, _e, cb) {
+          cb();
+        },
+      });
+      ee.kill = () => {
+        // Simulate SIGTERM closing the stream so `close` fires after the
+        // overflow handler clears chunks. Real pdftotext does this; the
+        // fake stream wouldn't otherwise emit close until both chunks
+        // drain past the (now-disabled) data handler.
+      };
+      ee.stdout.on("end", () => ee.emit("close", null));
+      setImmediate(() => {
+        ee.stdout.resume();
+        ee.stderr.resume();
+      });
+      return ee;
+    }
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
+      if (cmd === "which" && args[0] === "pdftotext") return fakeChild("/x\n", 0);
+      if (cmd === "pdftotext") return overflowChild();
+      return fakeChild("", 1);
+    });
+    expect(await pdfToText(fakePdf())).toBeNull();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]![0]).toMatch(/exceeded/i);
+  });
+
+  it("returns null when pdftotext exceeds the timeout (timeout path)", async () => {
+    // Fake clock so we don't sit on a 25s wall-clock wait.
+    vi.useFakeTimers();
+    try {
+      // Child that never closes on its own — only `kill()` (called from the
+      // timeout branch) makes it close.
+      function hangingChild() {
+        const ee: any = new EventEmitter();
+        // Readable that produces nothing and never ends until killed.
+        ee.stdout = new Readable({ read() {} });
+        ee.stderr = new Readable({ read() {} });
+        ee.stdin = new Writable({
+          write(_c, _e, cb) {
+            cb();
+          },
+        });
+        ee.kill = () => {
+          // Mirror real SIGTERM: end the streams and emit close.
+          ee.stdout.push(null);
+          ee.stderr.push(null);
+          setImmediate(() => ee.emit("close", null));
+        };
+        return ee;
+      }
+      vi.mocked(spawn).mockImplementation((cmd, args) => {
+        if (cmd === "which" && args[0] === "pdftotext") return fakeChild("/x\n", 0);
+        if (cmd === "pdftotext") return hangingChild();
+        return fakeChild("", 1);
+      });
+      const p = pdfToText(fakePdf());
+      // Advance past the 25s pdftotext timeout. Two ticks: one for the
+      // detectPdftotext microtask resolution, one to fire the setTimeout.
+      await vi.advanceTimersByTimeAsync(26_000);
+      expect(await p).toBeNull();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0]![0]).toMatch(/timed out/i);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

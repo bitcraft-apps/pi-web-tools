@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process";
 
-// Same backstop magnitude as extract.ts. pdftotext on a moderately-sized PDF
-// (academic paper, RFC) finishes in tens of ms; on a 5 MB scanned-image PDF
-// it can spike to a couple of seconds. 10s is the catastrophe backstop, not
-// a routine bound — a real timeout almost certainly means a malformed PDF
-// or a poppler bug, not a slow document.
-const PDFTOTEXT_TIMEOUT_MS = 10_000;
+// pdftotext on a moderately-sized PDF (academic paper, RFC) finishes in tens
+// of ms; on a 5 MB scanned/OCR-heavy PDF it can legitimately spike to several
+// seconds on slower machines. 25s is the catastrophe backstop, kept under
+// webfetch's 30s outer budget so a timeout here surfaces as our specific
+// "pdftotext timed out" warning rather than the generic outer abort.
+const PDFTOTEXT_TIMEOUT_MS = 25_000;
 
 // 50 MB peak-memory backstop on pdftotext stdout, matching extract.ts. The
 // upstream byte cap on the PDF itself is MAX_RESPONSE_BYTES (5 MB) — a 5 MB
@@ -86,6 +86,11 @@ function runPdftotext(stdin: Uint8Array): Promise<string> {
     }, PDFTOTEXT_TIMEOUT_MS);
 
     child.stdout.on("data", (c: Buffer) => {
+      // Once we've decided to abort (overflow or timeout), drop further
+      // chunks on the floor — otherwise pdftotext can keep firing data
+      // events between SIGTERM and close, repeatedly clearing chunks and
+      // re-calling kill. Harmless but wasteful.
+      if (overflowed || timedOut) return;
       stdoutBytes += c.length;
       if (stdoutBytes > PDFTOTEXT_MAX_BYTES) {
         overflowed = true;
@@ -121,7 +126,9 @@ function runPdftotext(stdin: Uint8Array): Promise<string> {
     // unhandled and crashes the process. The close/error/timeout paths
     // above already produce the right Promise outcome.
     child.stdin.on("error", () => {});
-    child.stdin.end(Buffer.from(stdin.buffer, stdin.byteOffset, stdin.byteLength));
+    // Node's writable.end() accepts a Uint8Array directly — no Buffer wrapper
+    // needed (Buffer is a Uint8Array subclass, not a required input type).
+    child.stdin.end(stdin);
   });
 }
 

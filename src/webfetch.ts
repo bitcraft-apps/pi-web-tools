@@ -460,8 +460,9 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     const buf = await readBoundedBody(response);
     const text = await pdfToText(buf);
     if (text === null) {
-      const ctShort = contentType.split(";")[0] || "application/pdf";
-      throw new Error(`Cannot fetch ${ctShort}. Use a tool that supports binary content.`);
+      // kind === "pdf" already implies classifyMime accepted application/pdf,
+      // so hardcode it here rather than re-parsing contentType.
+      throw new Error(`Cannot fetch application/pdf. Use a tool that supports binary content.`);
     }
     return truncate(text, maxChars);
   }

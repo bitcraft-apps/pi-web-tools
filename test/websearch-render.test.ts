@@ -38,6 +38,23 @@ describe("formatWebsearchCall", () => {
     ).toBe('websearch "pierogi" limit=5 region=pl-pl safesearch=off');
   });
 
+  it("surfaces time when set", () => {
+    expect(formatWebsearchCall({ query: "latest x", time: "w" }, theme)).toBe(
+      'websearch "latest x" time=w',
+    );
+  });
+
+  it("shows time alongside other muted extras in a stable order", () => {
+    // Order matches the source insertion order: limit, region, safesearch, time.
+    // Pinned by test so a future reorder is a deliberate choice, not an accident.
+    expect(
+      formatWebsearchCall(
+        { query: "q", limit: 3, region: "de-de", safesearch: "off", time: "d" },
+        theme,
+      ),
+    ).toBe('websearch "q" limit=3 region=de-de safesearch=off time=d');
+  });
+
   it("omits limit when explicitly set to the default", () => {
     expect(formatWebsearchCall({ query: "x", limit: 8 }, theme)).toBe('websearch "x"');
   });

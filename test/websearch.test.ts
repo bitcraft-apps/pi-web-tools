@@ -112,6 +112,35 @@ describe("websearchTool", () => {
     );
   });
 
+  it("passes time through to runDdgr", async () => {
+    vi.mocked(runDdgr).mockResolvedValueOnce([]);
+    await websearchTool.execute(
+      "tc-time",
+      { query: "latest pi release", time: "w" },
+      new AbortController().signal,
+      () => {},
+      stubCtx,
+    );
+    expect(runDdgr).toHaveBeenLastCalledWith(
+      "latest pi release",
+      8,
+      expect.objectContaining({ time: "w" }),
+    );
+  });
+
+  it("omits time from runDdgr opts when not supplied", async () => {
+    vi.mocked(runDdgr).mockResolvedValueOnce([]);
+    await websearchTool.execute(
+      "tc-no-time",
+      { query: "x" },
+      new AbortController().signal,
+      () => {},
+      stubCtx,
+    );
+    const opts = vi.mocked(runDdgr).mock.lastCall?.[2];
+    expect(opts?.time).toBeUndefined();
+  });
+
   it("propagates errors from ddgr", async () => {
     vi.mocked(runDdgr).mockRejectedValueOnce(
       new Error("ddgr not installed. Run: brew install ddgr"),

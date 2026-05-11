@@ -80,6 +80,24 @@ describe("buildDdgrArgs", () => {
     expect(args[args.length - 2]).toBe("--");
     expect(args[args.length - 1]).toBe("--evil");
   });
+
+  it("omits --time when not provided", () => {
+    expect(buildDdgrArgs("q", 8)).not.toContain("--time");
+    expect(buildDdgrArgs("q", 8, { region: "us-en" })).not.toContain("--time");
+  });
+
+  it("includes --time <bucket> for each valid value", () => {
+    for (const t of ["d", "w", "m", "y"] as const) {
+      const args = buildDdgrArgs("q", 8, { time: t });
+      expect(args).toContain("--time");
+      expect(args[args.indexOf("--time") + 1]).toBe(t);
+    }
+  });
+
+  it("--time stays before -- so it isn't parsed as part of the query", () => {
+    const args = buildDdgrArgs("q", 8, { time: "w" });
+    expect(args.indexOf("--time")).toBeLessThan(args.indexOf("--"));
+  });
 });
 
 describe("runDdgr (mocked)", () => {

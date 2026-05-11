@@ -52,7 +52,7 @@ You don't call them directly — pi's agent calls them when it needs.
   - `region` (optional): DuckDuckGo region code, e.g. `pl-pl`, `us-en`, `de-de`. Maps to ddgr's `--reg`. Default: ddgr's built-in (`us-en`).
   - `safesearch` (optional): `off` | `moderate` | `strict`. Default `moderate`. `off` passes `--unsafe` to ddgr. ddgr does not distinguish moderate vs strict — both use its default safe-search behavior (see [ddgr.1 manpage](https://github.com/jarun/ddgr/blob/master/ddgr.1); only `--unsafe` is exposed).
   - `time` (optional): `d` | `w` | `m` | `y` — restrict results to the past day/week/month/year. Maps to ddgr's `--time`. Default: no filter (all time). Use when the query is time-sensitive ("latest", "recent", "this week") — DuckDuckGo's default ranking otherwise surfaces years-old SEO content above recent results.
-- `webfetch`: default 50k chars output, hard cap 200k. 5 MB response cap. 30s timeout. **Cannot fetch:** PDFs, images, video, audio, localhost, 127/8, 169.254/16. **Cannot render:** JS-heavy SPAs (you'll get an empty markdown).
+- `webfetch`: default 50k chars output, hard cap 200k. 5 MB response cap. 30s timeout. **Cannot fetch:** images, video, audio, localhost, 127/8, 169.254/16. PDFs require optional `pdftotext` (see [PDF support](#pdf-support-optional)) — without it they're rejected as binary. **Cannot render:** JS-heavy SPAs (you'll get an empty markdown).
 - On `429 Too Many Requests` or `503 Service Unavailable`, honors a `Retry-After` header (delta-seconds or HTTP-date) for **one** retry, capped at 10s. No retry without `Retry-After`, no exponential backoff, no retry on other statuses.
 - Honors the `charset=` parameter on `Content-Type` for response decoding (e.g. `windows-1250`, `iso-8859-2`, `shift_jis`, `gb2312`). Unknown labels fall back to UTF-8.
 - For HTML responses without a `Content-Type` charset, sniffs `<meta charset="...">` or `<meta http-equiv="Content-Type" content="...; charset=...">` declared in the first 1024 bytes (HTML comments are stripped first).
@@ -81,6 +81,29 @@ No extractor present? `webfetch` keeps working — you just get the full pre-ext
 - **Fallback when extraction looks wrong.** If the extracted HTML is < 1% of the original and the original was > 10 KB (e.g. Readability picked the wrong container on a chrome-only page), `webfetch` discards the extracted result and converts the full HTML instead. You'll get a larger but complete result.
 - **Pages where the wanted content is outside the article container** (e.g. a code listing in a sidebar) may have it stripped by extraction. There's currently no per-call opt-out; if it bites you in practice, open an issue with the URL.
 - **$PATH trust.** The agent process inherits the user's `$PATH`; bare `trafilatura`/`rdrview` (same posture as `pandoc`/`ddgr`) means a poisoned earlier `$PATH` entry runs as the extractor. Newly relevant here because extractors parse attacker-controlled HTML.
+
+### PDF support (optional)
+
+If [`pdftotext`](https://poppler.freedesktop.org/) (poppler) is on `$PATH`, `webfetch` will accept `application/pdf` responses and return the extracted plain text. Useful for academic papers, RFCs served as PDF, datasheets, vendor manuals, government docs — the things you'd otherwise have to download and paste excerpts from.
+
+**Install:**
+
+```bash
+brew install poppler         # macOS
+# apt install poppler-utils  # Debian/Ubuntu
+# dnf install poppler-utils  # Fedora
+```
+
+Detected once per process and cached. `webfetch` invokes `pdftotext -layout -enc UTF-8 - -` on the response bytes; `-layout` preserves two-column papers and tables, which the default reading-order mode mangles. Output is plain text — no markdown wrapping, no fences (PDFs aren't structured for markdown rendering; pretending they are produces worse output than `pdftotext -layout`).
+
+No `pdftotext` present? PDFs are rejected with the existing "Cannot fetch application/pdf" error — byte-for-byte the same behavior as before. A one-shot warning is written to stderr on the first PDF fetch so you know what you're missing; it is **never** added to tool output.
+
+**Caveats:**
+
+- **Scanned / image-only PDFs** return empty or near-empty text. OCR (e.g. `tesseract`) is a much heavier dependency and a separate decision; out of scope.
+- **No DOCX, EPUB, RTF, ODT.** Each is a separate optional binary with its own quirks. Open an issue if you need one.
+- **No PDF form / annotation extraction.**
+- **5 MB response cap still applies.** A 50 MB PDF will be rejected before `pdftotext` ever runs.
 
 ### What `webfetch` does *not* do
 

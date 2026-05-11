@@ -3,6 +3,7 @@ import { validateUrl } from "./lib/url-guard.js";
 import { getSsrfAgent } from "./lib/ssrf-agent.js";
 import { htmlToMarkdown } from "./lib/html2md.js";
 import { extractContent } from "./lib/extract.js";
+import { pdfToText } from "./lib/pdf.js";
 import {
   ACCEPT_HEADER,
   BROWSER_UA,
@@ -24,7 +25,7 @@ export interface FetchInput {
 const HTML_MIMES = ["text/html", "application/xhtml+xml"];
 const HTML_SNIFF_BYTES = 1024;
 
-type BodyKind = "html" | "json" | "text";
+type BodyKind = "html" | "json" | "text" | "pdf";
 
 function parseCharset(contentType: string): string | undefined {
   const m = /;\s*charset\s*=\s*"?([^";\s]+)"?/i.exec(contentType);
@@ -166,8 +167,12 @@ function classifyMime(ct: string): BodyKind | "binary" {
   const lower = ct.toLowerCase();
   if (HTML_MIMES.some((m) => lower.startsWith(m))) return "html";
   if (lower.startsWith("application/json")) return "json";
+  // PDF gets its own kind so fetchAsMarkdown can route it through pdftotext
+  // when available, and fall back to the historical "Cannot fetch" binary
+  // error when it isn't. Behavior for users who haven't installed poppler
+  // is byte-for-byte identical to before.
+  if (lower.startsWith("application/pdf")) return "pdf";
   if (
-    lower.startsWith("application/pdf") ||
     lower.startsWith("image/") ||
     lower.startsWith("video/") ||
     lower.startsWith("audio/") ||
@@ -442,6 +447,23 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   if (kind === "binary") {
     const ctShort = contentType.split(";")[0] || "binary";
     throw new Error(`Cannot fetch ${ctShort}. Use a tool that supports binary content.`);
+  }
+
+  if (kind === "pdf") {
+    // Read the (already-bounded) response body as bytes and hand it to
+    // pdftotext. On null (no pdftotext on $PATH, or it failed/timed out)
+    // we throw the historical "Cannot fetch application/pdf" error so
+    // the no-poppler case is byte-for-byte identical to pre-#119 behavior.
+    // No markdown wrapping on success: PDFs aren't structured for markdown
+    // rendering; pretending they are produces worse output than the raw
+    // `pdftotext -layout` text.
+    const buf = await readBoundedBody(response);
+    const text = await pdfToText(buf);
+    if (text === null) {
+      const ctShort = contentType.split(";")[0] || "application/pdf";
+      throw new Error(`Cannot fetch ${ctShort}. Use a tool that supports binary content.`);
+    }
+    return truncate(text, maxChars);
   }
 
   const body = await decodeBody(response, kind);

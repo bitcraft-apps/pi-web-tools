@@ -14,9 +14,17 @@ vi.mock("../src/lib/extract.js", () => ({
   extractContent: vi.fn(async () => null),
 }));
 
+vi.mock("../src/lib/pdf.js", () => ({
+  // Default: simulate "no pdftotext on $PATH" — returns null. fetchAsMarkdown
+  // then throws the historical "Cannot fetch application/pdf" error, which
+  // pins the no-poppler regression-free contract from issue #119.
+  pdfToText: vi.fn(async () => null),
+}));
+
 import { fetchAsMarkdown, parseRetryAfter, RETRY_AFTER_MAX_MS } from "../src/webfetch.js";
 import { htmlToMarkdown } from "../src/lib/html2md.js";
 import { extractContent } from "../src/lib/extract.js";
+import { pdfToText } from "../src/lib/pdf.js";
 import { MAX_RESPONSE_BYTES } from "../src/lib/headers.js";
 
 function mockFetchOnce(opts: {
@@ -46,6 +54,8 @@ beforeEach(() => {
   // can't leak into the next.
   vi.mocked(extractContent).mockReset();
   vi.mocked(extractContent).mockResolvedValue(null);
+  vi.mocked(pdfToText).mockReset();
+  vi.mocked(pdfToText).mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -82,8 +92,60 @@ describe("fetchAsMarkdown", () => {
     expect(md).toContain('"a": 1');
   });
 
-  it("throws on PDF", async () => {
+  it("throws on PDF when pdftotext is unavailable (preserves pre-#119 error)", async () => {
+    // Default mock returns null (no pdftotext). The verbatim error string
+    // is the regression-free contract: users who haven't installed poppler
+    // see exactly the same message they always saw.
     mockFetchOnce({ body: "%PDF...", headers: { "content-type": "application/pdf" } });
+    await expect(fetchAsMarkdown({ url: "https://example.com/x.pdf" })).rejects.toThrow(
+      /cannot fetch.*pdf/i,
+    );
+  });
+
+  it("routes PDF through pdftotext when available and returns plain text", async () => {
+    vi.mocked(pdfToText).mockResolvedValueOnce("Hello from a PDF.");
+    mockFetchOnce({ body: "%PDF-1.7 ...", headers: { "content-type": "application/pdf" } });
+    const out = await fetchAsMarkdown({ url: "https://example.com/x.pdf" });
+    expect(out).toBe("Hello from a PDF.");
+    // Plain text — no markdown wrapping, no fences. Per issue #119 explicit
+    // non-goal: "Output is plain text — no markdown wrapping, no fences."
+    expect(out).not.toMatch(/^```/);
+    expect(pdfToText).toHaveBeenCalledTimes(1);
+    // Argument is the response buffer (ArrayBuffer).
+    const callArg = vi.mocked(pdfToText).mock.calls[0]![0];
+    expect(callArg).toBeInstanceOf(ArrayBuffer);
+  });
+
+  it("routes PDF with charset/parameters in content-type", async () => {
+    // application/pdf shouldn't carry a charset in practice, but some
+    // misconfigured servers append parameters; classifyMime uses startsWith
+    // so the routing must still pick the pdf path.
+    vi.mocked(pdfToText).mockResolvedValueOnce("ok");
+    mockFetchOnce({
+      body: "%PDF-1.7",
+      headers: { "content-type": "application/pdf; qs=0.9" },
+    });
+    const out = await fetchAsMarkdown({ url: "https://example.com/x.pdf" });
+    expect(out).toBe("ok");
+  });
+
+  it("truncates pdftotext output to max_chars with footer", async () => {
+    // Asserts the truncate() wiring is the same one the HTML/text paths use
+    // — issue #119 explicitly notes max_chars should keep working without a
+    // new per-page slicing parameter.
+    vi.mocked(pdfToText).mockResolvedValueOnce("x".repeat(1000));
+    mockFetchOnce({ body: "%PDF", headers: { "content-type": "application/pdf" } });
+    const out = await fetchAsMarkdown({ url: "https://example.com/x.pdf", max_chars: 50 });
+    expect(out).toMatch(/TRUNCATED/);
+    expect(out.length).toBeLessThanOrEqual(50 + 200);
+  });
+
+  it("throws PDF error when pdftotext returns null at runtime (failure path)", async () => {
+    // Mirrors the "pdftotext present but failed" path: pdf.ts swallows the
+    // failure to null, fetchAsMarkdown must still surface the historical
+    // error rather than leaking a half-empty success.
+    vi.mocked(pdfToText).mockResolvedValueOnce(null);
+    mockFetchOnce({ body: "%PDF", headers: { "content-type": "application/pdf" } });
     await expect(fetchAsMarkdown({ url: "https://example.com/x.pdf" })).rejects.toThrow(
       /cannot fetch.*pdf/i,
     );

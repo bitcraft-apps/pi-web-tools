@@ -303,6 +303,43 @@ async function readBodyPrefix(response: Response, max: number): Promise<string> 
 
 const CF_SNIFF_BYTES = 4096;
 
+// Maximum honored Retry-After wait. Servers can legitimately ask for
+// minutes-to-hours waits (planned maintenance, daily quota resets); blocking
+// an agent turn that long is worse UX than a clean error. The cap is the
+// budget for "polite, fast retry" — anything longer is the caller's problem.
+// See issue #121.
+export const RETRY_AFTER_MAX_MS = 10_000;
+
+// Parse an RFC 9110 §10.2.3 Retry-After value: either delta-seconds (a
+// non-negative integer) or an HTTP-date. Returns the wait in milliseconds,
+// or null if the header is missing/malformed/negative. Exported for unit
+// tests; do not export-and-reuse without re-reading the cap rationale above.
+export function parseRetryAfter(header: string | null): number | null {
+  if (!header) return null;
+  const trimmed = header.trim();
+  if (trimmed === "") return null;
+  // delta-seconds first: pure integer, no sign, no fraction. RFC 9110 says
+  // "non-negative decimal integer"; Number() would happily accept "1.5" or
+  // "1e3" and we don't want to silently honor those non-conforming values.
+  if (/^\d+$/.test(trimmed)) {
+    const secs = Number(trimmed);
+    // Defense against pathological-length headers: Number("9".repeat(309+))
+    // returns Infinity. Practical Retry-After values can never trip this,
+    // but a well-formed regex match shouldn't produce Infinity * 1000 = NaN.
+    if (Number.isFinite(secs)) return secs * 1000;
+    return null;
+  }
+  const date = Date.parse(trimmed);
+  // Only honor Date.parse output when the input actually looks like a date.
+  // Date.parse is implementation-defined for non-conforming strings: "1.5"
+  // resolves to a year-1 epoch on V8, "-3" can be NaN or a negative epoch,
+  // etc. HTTP-date per RFC 9110 §5.6.7 always contains a 3-letter day name
+  // and ASCII month name, so requiring a letter before trusting Date.parse
+  // rejects all the numeric-looking junk that slipped past the integer regex.
+  if (Number.isFinite(date) && /[A-Za-z]/.test(trimmed)) return Math.max(0, date - Date.now());
+  return null;
+}
+
 async function isCloudflareChallenge(response: Response): Promise<boolean> {
   if (response.headers.get("cf-mitigated") === "challenge") return true;
   if (response.status !== 403) return false;
@@ -327,6 +364,46 @@ async function isCloudflareChallenge(response: Response): Promise<boolean> {
   return /just a moment|cf-chl-bypass/i.test(prefix);
 }
 
+// Retry-After honoring for 429 / 503 (issue #121). Exactly one retry,
+// bounded by RETRY_AFTER_MAX_MS, only when the server tells us how long
+// to wait. Returns the post-retry response, or null if no retry was
+// performed (caller keeps the original). The "exactly one retry"
+// invariant is structural: this function is called once per fetchAsMarkdown
+// turn and never recurses.
+//
+// We deliberately retry against the *original* URL, not the post-redirect
+// final URL: re-walking the redirect chain re-runs validateUrl on every
+// hop, so an SSRF-blocked target can't be smuggled in by a server that
+// 302s on the first attempt and 429s with a Retry-After on the second.
+// Mild cost: an extra round-trip on the (rare) chained-redirect-then-rate-
+// limit path. Worth it.
+async function maybeRetryAfter(response: Response, url: URL, ua: string): Promise<Response | null> {
+  if (response.status !== 429 && response.status !== 503) return null;
+  const waitMs = parseRetryAfter(response.headers.get("retry-after"));
+  if (waitMs === null) return null;
+  if (waitMs > RETRY_AFTER_MAX_MS) {
+    // Don't silently swallow an over-cap wait — the user otherwise sees a
+    // generic HTTP 429/503 with no hint that a retry was on offer.
+    console.warn(
+      `webfetch: ignoring Retry-After of ${waitMs}ms (cap ${RETRY_AFTER_MAX_MS}ms); surfacing HTTP ${response.status}`,
+    );
+    return null;
+  }
+  // Cancel the first response's body so the connection releases before we
+  // sleep — otherwise undici keeps the socket pinned for the entire wait.
+  // Realistic failure mode of body.cancel() is "stream is locked" (e.g. if
+  // a future caller pre-read it), not "already closed"; the catch covers
+  // both. body is non-null for normal 429/503 responses but ?. is cheap
+  // belt-and-suspenders.
+  try {
+    await response.body?.cancel();
+  } catch {
+    /* locked or already closed — either way, nothing actionable here */
+  }
+  await new Promise((r) => setTimeout(r, waitMs));
+  return fetchWithRedirects(url, ua);
+}
+
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   const url = validateUrl(input.url);
   const maxChars = Math.min(Math.max(1, input.max_chars ?? MAX_CHARS_DEFAULT), MAX_CHARS_HARD_CAP);
@@ -335,14 +412,18 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // we deliberately do NOT fall through to the CF UA-swap retry — blocked
   // is blocked, regardless of UA. The retry only fires when the first call
   // returned a Response that looks like a CF challenge.
-  let response = await fetchWithRedirects(url, BROWSER_UA);
+  let currentUa = BROWSER_UA;
+  let response = await fetchWithRedirects(url, currentUa);
 
   if (await isCloudflareChallenge(response)) {
-    response = await fetchWithRedirects(url, OPENCODE_UA);
+    currentUa = OPENCODE_UA;
+    response = await fetchWithRedirects(url, currentUa);
     if (await isCloudflareChallenge(response)) {
       throw new Error("Site requires JS, cannot fetch in shell-only mode (Cloudflare challenge)");
     }
   }
+
+  response = (await maybeRetryAfter(response, url, currentUa)) ?? response;
 
   if (response.status >= 400) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);

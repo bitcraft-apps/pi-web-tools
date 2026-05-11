@@ -141,6 +141,10 @@ export interface WebsearchCallArgs {
  * what the LLM gets if it omits the arg anyway. Callers that need to
  * see the literal arg list should inspect the raw tool call, not this
  * formatter's output.
+ *
+ * Extras render in source insertion order: limit, region, safesearch,
+ * time. Pinned by test (see test/websearch-render.test.ts) so any
+ * reorder is a deliberate choice, not an accident.
  */
 export function formatWebsearchCall(
   args: WebsearchCallArgs | undefined,
@@ -166,10 +170,11 @@ export function formatWebsearchCall(
   ) {
     extras.push(`safesearch=${args.safesearch}`);
   }
-  // No default — the field is opt-in, so any string value the LLM supplied is
-  // by definition non-default and worth surfacing in the muted extras line.
-  // Schema validation already restricted it to TIME_VALUES at the boundary.
-  if (typeof args?.time === "string" && args.time.length > 0) {
+  // No default — the field is opt-in, so any value the LLM supplied is by
+  // definition non-default and worth surfacing in the muted extras line.
+  // Schema already restricted it to TIME_VALUES, so a plain truthy check
+  // matches the region/safesearch style above.
+  if (args?.time) {
     extras.push(`time=${args.time}`);
   }
   if (extras.length > 0) {

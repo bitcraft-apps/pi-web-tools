@@ -14,7 +14,7 @@ vi.mock("../src/lib/extract.js", () => ({
   extractContent: vi.fn(async () => null),
 }));
 
-import { fetchAsMarkdown } from "../src/webfetch.js";
+import { fetchAsMarkdown, parseRetryAfter, RETRY_AFTER_MAX_MS } from "../src/webfetch.js";
 import { htmlToMarkdown } from "../src/lib/html2md.js";
 import { extractContent } from "../src/lib/extract.js";
 import { MAX_RESPONSE_BYTES } from "../src/lib/headers.js";
@@ -910,6 +910,213 @@ describe("DNS-rebinding guard (issue #64)", () => {
     expect(blocked?.code).toBe("EBLOCKED");
     expect(blocked?.message).toMatch(/10\.0\.0\.1/);
     expect(calls).toBe(2);
+  });
+});
+
+describe("parseRetryAfter (issue #121)", () => {
+  it("parses integer seconds", () => {
+    expect(parseRetryAfter("5")).toBe(5_000);
+    expect(parseRetryAfter("0")).toBe(0);
+  });
+
+  it("returns null for missing header", () => {
+    expect(parseRetryAfter(null)).toBeNull();
+    expect(parseRetryAfter("")).toBeNull();
+    expect(parseRetryAfter("   ")).toBeNull();
+  });
+
+  it("returns null for malformed values", () => {
+    expect(parseRetryAfter("not-a-number")).toBeNull();
+    expect(parseRetryAfter("1.5")).toBeNull(); // RFC requires integer seconds
+    expect(parseRetryAfter("-3")).toBeNull();
+  });
+
+  it("parses HTTP-date in the future", () => {
+    const future = new Date(Date.now() + 5_000).toUTCString();
+    const ms = parseRetryAfter(future);
+    expect(ms).not.toBeNull();
+    // HTTP-date precision is one second, plus a tiny clock delta between
+    // generating `future` and parsing it. Allow 0..6000ms.
+    expect(ms!).toBeGreaterThanOrEqual(0);
+    expect(ms!).toBeLessThanOrEqual(6_000);
+  });
+
+  it("clamps past HTTP-date to 0", () => {
+    const past = new Date(Date.now() - 60_000).toUTCString();
+    expect(parseRetryAfter(past)).toBe(0);
+  });
+
+  it("accepts very large integers (caller is responsible for capping)", () => {
+    // 1 hour. parseRetryAfter does not cap — fetchAsMarkdown does, against
+    // RETRY_AFTER_MAX_MS. This separation is what lets the function stay pure.
+    expect(parseRetryAfter("3600")).toBe(3_600_000);
+  });
+});
+
+describe("Retry-After honoring (issue #121)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("retries once after Retry-After: 1 on 429 and succeeds", async () => {
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("slow down", {
+          status: 429,
+          headers: new Headers({ "content-type": "text/plain", "retry-after": "1" }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response("<h1>OK</h1>", {
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+        }),
+      );
+    vi.stubGlobal("fetch", mock);
+
+    const promise = fetchAsMarkdown({ url: "https://example.com" });
+    // Drain microtasks so the first response is observed and the sleep starts,
+    // then advance the fake clock past the requested wait.
+    await vi.advanceTimersByTimeAsync(2_000);
+    const md = await promise;
+    expect(mock).toHaveBeenCalledTimes(2);
+    expect(md).toContain("MD:");
+  });
+
+  it("retries once after Retry-After: 1 on 503 and succeeds", async () => {
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("unavailable", {
+          status: 503,
+          headers: new Headers({ "content-type": "text/plain", "retry-after": "1" }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response("<h1>OK</h1>", {
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+        }),
+      );
+    vi.stubGlobal("fetch", mock);
+
+    const promise = fetchAsMarkdown({ url: "https://example.com" });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await promise;
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry when Retry-After exceeds the cap", async () => {
+    const overCap = String(Math.ceil(RETRY_AFTER_MAX_MS / 1000) + 5);
+    const mock = vi.fn().mockResolvedValueOnce(
+      new Response("slow down", {
+        status: 503,
+        headers: new Headers({
+          "content-type": "text/plain",
+          "retry-after": overCap,
+        }),
+      }),
+    );
+    vi.stubGlobal("fetch", mock);
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 503/);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry when Retry-After is missing", async () => {
+    const mock = vi.fn().mockResolvedValueOnce(
+      new Response("slow down", {
+        status: 429,
+        headers: new Headers({ "content-type": "text/plain" }),
+      }),
+    );
+    vi.stubGlobal("fetch", mock);
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 429/);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry when Retry-After is malformed", async () => {
+    const mock = vi.fn().mockResolvedValueOnce(
+      new Response("slow down", {
+        status: 429,
+        headers: new Headers({ "content-type": "text/plain", "retry-after": "soon" }),
+      }),
+    );
+    vi.stubGlobal("fetch", mock);
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 429/);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws on a second 429 — only one retry", async () => {
+    const headers429 = { "content-type": "text/plain", "retry-after": "1" };
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("slow down", { status: 429, headers: new Headers(headers429) }))
+      .mockResolvedValueOnce(new Response("slow down", { status: 429, headers: new Headers(headers429) }));
+    vi.stubGlobal("fetch", mock);
+
+    const promise = fetchAsMarkdown({ url: "https://example.com" });
+    // Surface the rejection to the test runner so an unhandled rejection from
+    // the awaited timer advance doesn't fail the suite before the assertion.
+    const result = promise.catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const err = await result;
+    expect(err).toBeInstanceOf(Error);
+    expect(err instanceof Error ? err.message : String(err)).toMatch(/HTTP 429/);
+    expect(mock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry on 502 / 504 (out of scope per issue #121)", async () => {
+    for (const status of [502, 504]) {
+      const mock = vi.fn().mockResolvedValueOnce(
+        new Response("bad gw", {
+          status,
+          headers: new Headers({ "content-type": "text/plain", "retry-after": "1" }),
+        }),
+      );
+      vi.stubGlobal("fetch", mock);
+      await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
+        new RegExp(`HTTP ${status}`),
+      );
+      expect(mock).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("reuses the OPENCODE UA on retry after a CF UA-swap", async () => {
+    // First hop: CF challenge with BROWSER_UA. Second hop: OPENCODE_UA gets
+    // past CF but the upstream returns 429+Retry-After. Third hop must reuse
+    // OPENCODE_UA, not reset to BROWSER_UA — otherwise CF would re-challenge.
+    const cfHeaders = new Headers({ "content-type": "text/html", "cf-mitigated": "challenge" });
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("<html>cf</html>", { status: 200, headers: cfHeaders }))
+      .mockResolvedValueOnce(
+        new Response("slow down", {
+          status: 429,
+          headers: new Headers({ "content-type": "text/plain", "retry-after": "1" }),
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response("<h1>OK</h1>", {
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+        }),
+      );
+    vi.stubGlobal("fetch", mock);
+
+    const promise = fetchAsMarkdown({ url: "https://example.com" });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await promise;
+    expect(mock).toHaveBeenCalledTimes(3);
+    // OPENCODE_UA on hop 2 (CF retry) and hop 3 (Retry-After retry).
+    expect(mock.mock.calls[1]![1].headers["User-Agent"]).toBe("opencode");
+    expect(mock.mock.calls[2]![1].headers["User-Agent"]).toBe("opencode");
   });
 });
 

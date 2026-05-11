@@ -303,6 +303,40 @@ async function readBodyPrefix(response: Response, max: number): Promise<string> 
 
 const CF_SNIFF_BYTES = 4096;
 
+// Maximum honored Retry-After wait. Servers can legitimately ask for
+// minutes-to-hours waits (planned maintenance, daily quota resets); blocking
+// an agent turn that long is worse UX than a clean error. The cap is the
+// budget for "polite, fast retry" — anything longer is the caller's problem.
+// See issue #121.
+export const RETRY_AFTER_MAX_MS = 10_000;
+
+// Parse an RFC 9110 §10.2.3 Retry-After value: either delta-seconds (a
+// non-negative integer) or an HTTP-date. Returns the wait in milliseconds,
+// or null if the header is missing/malformed/negative. Exported for unit
+// tests; do not export-and-reuse without re-reading the cap rationale above.
+export function parseRetryAfter(header: string | null): number | null {
+  if (!header) return null;
+  const trimmed = header.trim();
+  if (trimmed === "") return null;
+  // delta-seconds first: pure integer, no sign, no fraction. RFC 9110 says
+  // "non-negative decimal integer"; Number() would happily accept "1.5" or
+  // "1e3" and we don't want to silently honor those non-conforming values.
+  if (/^\d+$/.test(trimmed)) {
+    const secs = Number(trimmed);
+    if (Number.isFinite(secs)) return secs * 1000;
+    return null;
+  }
+  const date = Date.parse(trimmed);
+  // Only honor Date.parse output when the input actually looks like a date.
+  // Date.parse is implementation-defined for non-conforming strings: "1.5"
+  // resolves to a year-1 epoch on V8, "-3" can be NaN or a negative epoch,
+  // etc. HTTP-date per RFC 9110 §5.6.7 always contains a 3-letter day name
+  // and ASCII month name, so requiring a letter before trusting Date.parse
+  // rejects all the numeric-looking junk that slipped past the integer regex.
+  if (Number.isFinite(date) && /[A-Za-z]/.test(trimmed)) return Math.max(0, date - Date.now());
+  return null;
+}
+
 async function isCloudflareChallenge(response: Response): Promise<boolean> {
   if (response.headers.get("cf-mitigated") === "challenge") return true;
   if (response.status !== 403) return false;
@@ -335,12 +369,37 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // we deliberately do NOT fall through to the CF UA-swap retry — blocked
   // is blocked, regardless of UA. The retry only fires when the first call
   // returned a Response that looks like a CF challenge.
-  let response = await fetchWithRedirects(url, BROWSER_UA);
+  let currentUa = BROWSER_UA;
+  let response = await fetchWithRedirects(url, currentUa);
 
   if (await isCloudflareChallenge(response)) {
-    response = await fetchWithRedirects(url, OPENCODE_UA);
+    currentUa = OPENCODE_UA;
+    response = await fetchWithRedirects(url, currentUa);
     if (await isCloudflareChallenge(response)) {
       throw new Error("Site requires JS, cannot fetch in shell-only mode (Cloudflare challenge)");
+    }
+  }
+
+  // Retry-After honoring for 429 / 503 (issue #121). Exactly one retry,
+  // bounded by RETRY_AFTER_MAX_MS, only when the server tells us how long
+  // to wait. No exponential backoff, no retry on other statuses, no retry
+  // without a Retry-After header — we're not guessing wait times. Re-uses
+  // whichever UA produced this response so the post-CF path doesn't get
+  // reset to BROWSER_UA on retry. Only fires once: a second 429/503 is a
+  // real rate-limit situation, surface it.
+  if (response.status === 429 || response.status === 503) {
+    const waitMs = parseRetryAfter(response.headers.get("retry-after"));
+    if (waitMs !== null && waitMs <= RETRY_AFTER_MAX_MS) {
+      // Cancel the first response's body so the connection releases
+      // before we sleep — otherwise undici keeps the socket pinned for
+      // the entire wait.
+      try {
+        await response.body?.cancel();
+      } catch {
+        /* already closed */
+      }
+      await new Promise((r) => setTimeout(r, waitMs));
+      response = await fetchWithRedirects(url, currentUa);
     }
   }
 

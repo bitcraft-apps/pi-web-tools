@@ -936,9 +936,10 @@ describe("parseRetryAfter (issue #121)", () => {
     const ms = parseRetryAfter(future);
     expect(ms).not.toBeNull();
     // HTTP-date precision is one second, plus a tiny clock delta between
-    // generating `future` and parsing it. Allow 0..6000ms.
+    // generating `future` and parsing it. 5500ms upper bound: 1s rounding +
+    // ~500ms of CI slop, no more.
     expect(ms!).toBeGreaterThanOrEqual(0);
-    expect(ms!).toBeLessThanOrEqual(6_000);
+    expect(ms!).toBeLessThanOrEqual(5_500);
   });
 
   it("clamps past HTTP-date to 0", () => {
@@ -980,8 +981,9 @@ describe("Retry-After honoring (issue #121)", () => {
 
     const promise = fetchAsMarkdown({ url: "https://example.com" });
     // Drain microtasks so the first response is observed and the sleep starts,
-    // then advance the fake clock past the requested wait.
-    await vi.advanceTimersByTimeAsync(2_000);
+    // then advance the fake clock by exactly the requested wait — exercises
+    // the "sleep at least Retry-After ms" contract, not just "≥ wait".
+    await vi.advanceTimersByTimeAsync(1_000);
     const md = await promise;
     expect(mock).toHaveBeenCalledTimes(2);
     expect(md).toContain("MD:");
@@ -1057,8 +1059,12 @@ describe("Retry-After honoring (issue #121)", () => {
     const headers429 = { "content-type": "text/plain", "retry-after": "1" };
     const mock = vi
       .fn()
-      .mockResolvedValueOnce(new Response("slow down", { status: 429, headers: new Headers(headers429) }))
-      .mockResolvedValueOnce(new Response("slow down", { status: 429, headers: new Headers(headers429) }));
+      .mockResolvedValueOnce(
+        new Response("slow down", { status: 429, headers: new Headers(headers429) }),
+      )
+      .mockResolvedValueOnce(
+        new Response("slow down", { status: 429, headers: new Headers(headers429) }),
+      );
     vi.stubGlobal("fetch", mock);
 
     const promise = fetchAsMarkdown({ url: "https://example.com" });
@@ -1115,8 +1121,16 @@ describe("Retry-After honoring (issue #121)", () => {
     await promise;
     expect(mock).toHaveBeenCalledTimes(3);
     // OPENCODE_UA on hop 2 (CF retry) and hop 3 (Retry-After retry).
-    expect(mock.mock.calls[1]![1].headers["User-Agent"]).toBe("opencode");
-    expect(mock.mock.calls[2]![1].headers["User-Agent"]).toBe("opencode");
+    // Defensively assert the headers slot exists: if fetchWithRedirects ever
+    // switches to a Headers instance, plain-object indexing silently yields
+    // undefined and the .toBe assertions would still "pass" against the
+    // wrong polarity.
+    const hop2 = mock.mock.calls[1]![1];
+    const hop3 = mock.mock.calls[2]![1];
+    expect(hop2.headers).toBeDefined();
+    expect(hop3.headers).toBeDefined();
+    expect(hop2.headers["User-Agent"]).toBe("opencode");
+    expect(hop3.headers["User-Agent"]).toBe("opencode");
   });
 });
 

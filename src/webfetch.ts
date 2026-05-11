@@ -323,6 +323,9 @@ export function parseRetryAfter(header: string | null): number | null {
   // "1e3" and we don't want to silently honor those non-conforming values.
   if (/^\d+$/.test(trimmed)) {
     const secs = Number(trimmed);
+    // Defense against pathological-length headers: Number("9".repeat(309+))
+    // returns Infinity. Practical Retry-After values can never trip this,
+    // but a well-formed regex match shouldn't produce Infinity * 1000 = NaN.
     if (Number.isFinite(secs)) return secs * 1000;
     return null;
   }
@@ -361,6 +364,46 @@ async function isCloudflareChallenge(response: Response): Promise<boolean> {
   return /just a moment|cf-chl-bypass/i.test(prefix);
 }
 
+// Retry-After honoring for 429 / 503 (issue #121). Exactly one retry,
+// bounded by RETRY_AFTER_MAX_MS, only when the server tells us how long
+// to wait. Returns the post-retry response, or null if no retry was
+// performed (caller keeps the original). The "exactly one retry"
+// invariant is structural: this function is called once per fetchAsMarkdown
+// turn and never recurses.
+//
+// We deliberately retry against the *original* URL, not the post-redirect
+// final URL: re-walking the redirect chain re-runs validateUrl on every
+// hop, so an SSRF-blocked target can't be smuggled in by a server that
+// 302s on the first attempt and 429s with a Retry-After on the second.
+// Mild cost: an extra round-trip on the (rare) chained-redirect-then-rate-
+// limit path. Worth it.
+async function maybeRetryAfter(response: Response, url: URL, ua: string): Promise<Response | null> {
+  if (response.status !== 429 && response.status !== 503) return null;
+  const waitMs = parseRetryAfter(response.headers.get("retry-after"));
+  if (waitMs === null) return null;
+  if (waitMs > RETRY_AFTER_MAX_MS) {
+    // Don't silently swallow an over-cap wait — the user otherwise sees a
+    // generic HTTP 429/503 with no hint that a retry was on offer.
+    console.warn(
+      `webfetch: ignoring Retry-After of ${waitMs}ms (cap ${RETRY_AFTER_MAX_MS}ms); surfacing HTTP ${response.status}`,
+    );
+    return null;
+  }
+  // Cancel the first response's body so the connection releases before we
+  // sleep — otherwise undici keeps the socket pinned for the entire wait.
+  // Realistic failure mode of body.cancel() is "stream is locked" (e.g. if
+  // a future caller pre-read it), not "already closed"; the catch covers
+  // both. body is non-null for normal 429/503 responses but ?. is cheap
+  // belt-and-suspenders.
+  try {
+    await response.body?.cancel();
+  } catch {
+    /* locked or already closed — either way, nothing actionable here */
+  }
+  await new Promise((r) => setTimeout(r, waitMs));
+  return fetchWithRedirects(url, ua);
+}
+
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   const url = validateUrl(input.url);
   const maxChars = Math.min(Math.max(1, input.max_chars ?? MAX_CHARS_DEFAULT), MAX_CHARS_HARD_CAP);
@@ -380,28 +423,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     }
   }
 
-  // Retry-After honoring for 429 / 503 (issue #121). Exactly one retry,
-  // bounded by RETRY_AFTER_MAX_MS, only when the server tells us how long
-  // to wait. No exponential backoff, no retry on other statuses, no retry
-  // without a Retry-After header — we're not guessing wait times. Re-uses
-  // whichever UA produced this response so the post-CF path doesn't get
-  // reset to BROWSER_UA on retry. Only fires once: a second 429/503 is a
-  // real rate-limit situation, surface it.
-  if (response.status === 429 || response.status === 503) {
-    const waitMs = parseRetryAfter(response.headers.get("retry-after"));
-    if (waitMs !== null && waitMs <= RETRY_AFTER_MAX_MS) {
-      // Cancel the first response's body so the connection releases
-      // before we sleep — otherwise undici keeps the socket pinned for
-      // the entire wait.
-      try {
-        await response.body?.cancel();
-      } catch {
-        /* already closed */
-      }
-      await new Promise((r) => setTimeout(r, waitMs));
-      response = await fetchWithRedirects(url, currentUa);
-    }
-  }
+  response = (await maybeRetryAfter(response, url, currentUa)) ?? response;
 
   if (response.status >= 400) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);

@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.2.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.1.0...v1.2.0) (2026-05-11)
+
+
+### Features
+
+* **webfetch:** pdf support via optional pdftotext ([#126](https://github.com/bitcraft-apps/pi-web-tools/issues/126)) ([b5ba5ec](https://github.com/bitcraft-apps/pi-web-tools/commit/b5ba5ec4d1d0ae9a4213c7843637aa2e877c9fc6))
+* **websearch:** time filter parameter (d|w|m|y) ([#123](https://github.com/bitcraft-apps/pi-web-tools/issues/123)) ([98c5802](https://github.com/bitcraft-apps/pi-web-tools/commit/98c58025098681e1496a71676e25be29a41e7e45))
+
+
+### Bug Fixes
+
+* **webfetch:** honor Retry-After on 429/503 with one bounded retry ([#125](https://github.com/bitcraft-apps/pi-web-tools/issues/125)) ([c750c98](https://github.com/bitcraft-apps/pi-web-tools/commit/c750c98a668ff72a637dd8388654b2112d25ba00))
+
 ## [1.1.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.0.0...v1.1.0) (2026-05-09)
 
 

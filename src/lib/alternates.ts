@@ -40,9 +40,20 @@ export interface Alternate {
 // Scope the scan to <head>...</head>. Fallbacks in priority order:
 //   1. </head> closer (well-formed)
 //   2. <body open tag (malformed but real — see acceptance criteria)
-//   3. end of string (no <head> closer at all; the no-<head>-at-all case
-//      is caught earlier by the outer `if (!headMatch)` guard, which
-//      also rejects HTML where the entire <head> open tag is missing)
+//   3. end of string (no <head> closer at all and no <body> either; the
+//      no-<head>-at-all case is caught earlier by the outer
+//      `if (!headMatch)` guard, which also rejects HTML where the entire
+//      <head> open tag is missing)
+//
+// Case (3) is intentional even though it can over-scan a truly malformed
+// page (e.g. a fragment response with `<head>` opened but neither closed
+// nor followed by `<body>`): the alternative — refusing to scan such
+// pages — silently regresses the YouTube/Substack/etc. happy path the
+// instant a server ships a non-conforming variant. Any `<link
+// rel=alternate>` we surface from the over-scanned tail still has to pass
+// the allowlist, same-origin, and SSRF gates at the call site, so the
+// blast radius of "we treated more bytes as <head> than the spec allows"
+// is bounded.
 //
 // Without this scope a stray <link rel="alternate"> in <body> (some sites
 // inject in-content video embeds with link tags) would be picked up too,

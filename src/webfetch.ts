@@ -463,9 +463,14 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   }
 
   const cl = response.headers.get("content-length");
-  if (cl && Number(cl) > MAX_RESPONSE_BYTES) {
+  // `Number.isFinite` guard: `Number("abc")` is NaN and any NaN comparison
+  // is false, so a garbage Content-Length would slip past this pre-check.
+  // readBoundedBody re-enforces the cap from the stream regardless, but
+  // the pre-check exists precisely to short-circuit before reading.
+  const clNum = cl ? Number(cl) : NaN;
+  if (Number.isFinite(clNum) && clNum > MAX_RESPONSE_BYTES) {
     throw new Error(
-      `Response too large (${(Number(cl) / 1024 / 1024).toFixed(1)} MB, max ${MAX_RESPONSE_MB})`,
+      `Response too large (${(clNum / 1024 / 1024).toFixed(1)} MB, max ${MAX_RESPONSE_MB})`,
     );
   }
 
@@ -554,8 +559,14 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // The HEAD-scan itself (regex tokenization) is cheap; the HTTP round-
   // trip only fires when an allowlisted alternate is actually present —
   // typically YouTube/Vimeo/Substack/etc.
-  const looksThin =
-    extracted !== null && (!useExtracted || extracted.length < 200);
+  // `&&` (not `||`) on the 200-char floor: a genuinely short page (e.g.
+  // 10 KB body, 150-char correct extraction at 1.5%) passes the 1% check
+  // (`useExtracted` is true) and must keep its real content. Only when
+  // extraction was already rejected (`!useExtracted`, i.e. < 1% of body)
+  // do we apply the additional floor — for very large bodies a passing 1%
+  // implies > 200 already, so the floor is a no-op there; it only matters
+  // in the 10–20 KB band where 1% can be in the tens of chars.
+  const looksThin = extracted !== null && !useExtracted && extracted.length < 200;
   if (looksThin) {
     // Same finalUrl rationale as above: alternate hrefs are resolved and
     // same-origin-checked against the page we actually fetched, not the
@@ -583,6 +594,9 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
 // next one — caller falls back to the thin extraction we already had.
 // Multi-attempt logic is latency we don't want on the unhappy path.
 //
+// Pre-HTTP filters (allowlist miss, bad URL, cross-origin) `continue` to
+// the next entry instead — see the asymmetry note inside the function.
+//
 // All HTTP goes through `fetchWithRedirects` so SSRF guard, redirect cap,
 // and Retry-After all apply uniformly with the primary fetch.
 async function tryFollowAlternate(
@@ -592,13 +606,13 @@ async function tryFollowAlternate(
 ): Promise<string | null> {
   const pageUrlParsed = new URL(pageUrl);
   const pageOrigin = pageUrlParsed.origin;
-  // Asymmetry note: the allowlist check below uses `continue` (skip this
-  // entry, try the next), but every other failure mode — bad URL, wrong
-  // origin, network error, 4xx/5xx, unparseable body — uses first-match-
-  // wins (return null and let the caller fall back to thin extraction).
-  // The allowlist isn't an "attempt" — we never made an HTTP request — so
-  // skipping past a non-allowlisted (e.g. RSS) entry to reach the next
-  // candidate doesn't violate the no-multi-attempt latency contract.
+  // Asymmetry note: pre-HTTP filters — allowlist miss, malformed/SSRF-
+  // rejected URL, cross-origin href — use `continue` (skip this entry, try
+  // the next). Post-HTTP failures — network error, 4xx/5xx, unparseable
+  // body — use first-match-wins (`return null` and let the caller fall
+  // back to thin extraction). Pre-HTTP cases aren't "attempts" — we never
+  // issued a request — so skipping them to reach the next candidate
+  // doesn't violate the no-multi-attempt latency contract.
   for (const alt of findAlternates(html)) {
     if (!ALLOWED_ALTERNATE_TYPES.has(alt.type)) continue;
     let altUrl: URL;
@@ -671,8 +685,10 @@ async function formatAlternateBody(response: Response): Promise<string | null> {
   // Mirror fetchAsMarkdown's content-length pre-check so an alternate
   // server can't bypass the 5 MB cap by virtue of being a fallback path.
   // readBoundedBody enforces the same cap from the stream regardless.
+  // `Number.isFinite` guard: see the equivalent comment in fetchAsMarkdown.
   const cl = response.headers.get("content-length");
-  if (cl && Number(cl) > MAX_RESPONSE_BYTES) {
+  const clNum = cl ? Number(cl) : NaN;
+  if (Number.isFinite(clNum) && clNum > MAX_RESPONSE_BYTES) {
     await cancel();
     return null;
   }
@@ -700,6 +716,9 @@ async function formatAlternateBody(response: Response): Promise<string | null> {
       return body;
     }
   }
+  // text/markdown is already markdown — no fence wrapper, unlike the JSON
+  // branch above. Caller can't distinguish this from a text/* fallthrough
+  // by output shape, but that's fine: both are intentionally returned raw.
   return body;
 }
 

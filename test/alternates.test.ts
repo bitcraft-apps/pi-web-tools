@@ -134,6 +134,20 @@ describe("findAlternates", () => {
     expect(findAlternates("<body><p>no head</p></body>")).toEqual([]);
   });
 
+  it("scans to end-of-string when <head> has no closer and no <body>", () => {
+    // Truly malformed input — `<head>` opens but neither `</head>` nor
+    // `<body>` ever appears (real-world fragment responses do this). The
+    // HEAD_RE third fallback (`$`) intentionally treats the entire tail
+    // as in-scope so we don't silently regress the happy path on servers
+    // that ship non-conforming variants. Any picked-up <link> still has
+    // to clear the call-site allowlist + same-origin + SSRF gates, so the
+    // blast radius is bounded.
+    const html = `<html><head><link rel="alternate" type="${OEMBED_JSON}" href="/late.json">`;
+    const alts = findAlternates(html);
+    expect(alts).toHaveLength(1);
+    expect(alts[0]?.url).toBe("/late.json");
+  });
+
   it("ignores commented-out <link> tags", () => {
     // Defense against an author pre-commenting alternates during a
     // migration; we don't want a stale oEmbed endpoint resurrected from

@@ -1109,6 +1109,20 @@ describe("looksLikeJsShell (issue #129)", () => {
   it("matches at the very start of input", () => {
     expect(looksLikeJsShell("JavaScript is not available somewhere")).toBe(true);
   });
+
+  // Tightened post-review: bare "please enable JavaScript" is too common in
+  // legit <noscript> fragments. Require an imperative tail.
+  it("does NOT match bare 'please enable JavaScript' without imperative tail", () => {
+    expect(
+      looksLikeJsShell("Some features may not work. Please enable JavaScript. (legacy notice)"),
+    ).toBe(false);
+  });
+
+  it("matches Twitter/X-style 'and Cookies to continue' phrasing", () => {
+    expect(looksLikeJsShell("Please enable JavaScript and Cookies to continue using X.")).toBe(
+      true,
+    );
+  });
 });
 
 describe("JS-only shell detection in fetchAsMarkdown (issue #129)", () => {

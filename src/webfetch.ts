@@ -352,28 +352,47 @@ const CF_SNIFF_BYTES = 4096;
 // rules: from a measured failing URL.
 const JS_SHELL_MARKERS = [
   /\bJavaScript is not available\b/i,
-  /\bplease enable JavaScript\b/i,
+  // "please enable JavaScript" alone is too loose — appears verbatim in many
+  // <noscript> fragments that survive extraction on legit pages. Require a
+  // "to (continue|use|view|run|access)" tail within ~40 chars so the marker
+  // only fires on the imperative-instruction shape SPA shells use. The 40-char
+  // window covers Twitter/X's "Please enable JavaScript and Cookies to continue"
+  // without re-admitting the bare phrase.
+  /\bplease enable JavaScript\b[^.]{0,40}\bto (continue|use|view|run|access)\b/i,
   /\byou need to enable JavaScript to run this app\b/i,
   /\bthis website requires JavaScript\b/i,
 ];
 
-// Marker presence in the first 4 KB of `text`. Same window as CF_SNIFF_BYTES
-// for the same reason: a real article that happens to mention "please enable
+// Sniff window for marker presence, in JS string code units (not bytes — the
+// caller compares against `.length`, same unit). Numerically equal to
+// CF_SNIFF_BYTES because the rationale is the same (don't false-positive on
+// deep-body mentions of the marker phrase), but the unit differs, so it gets
+// its own name.
+const JS_SHELL_SNIFF_CHARS = 4096;
+
+// Marker presence in the first 4 KB of `text`. Same window-size rationale as
+// CF_SNIFF_BYTES: a real article that happens to mention "please enable
 // JavaScript" deep in its body (sidebar boilerplate, comment thread, an
 // article *about* JS-disabled UX) won't match. Caller pairs this with a hard
 // post-extraction size check (< 2 KB) — both conditions together are the
 // SPA-shell signature; either alone false-positives. Exported for unit tests.
+//
+// The slice is a no-op when called from fetchAsMarkdown (the 2 KB body cap
+// makes the input shorter than the window) — it exists for direct callers
+// of this exported helper.
 export function looksLikeJsShell(text: string): boolean {
-  const prefix = text.slice(0, CF_SNIFF_BYTES);
+  const prefix = text.slice(0, JS_SHELL_SNIFF_CHARS);
   return JS_SHELL_MARKERS.some((re) => re.test(prefix));
 }
 
-// Two-condition AND threshold for the shell check. Tuned against the
-// repro in issue #129: a Twitter SPA shell post-#127 (data: URI strip) is
-// ~2 KB of "enable JavaScript" boilerplate; legitimate extracted articles
-// are many KB even when stubby. Lives next to looksLikeJsShell so any future
-// retune touches both signals together.
-const JS_SHELL_MAX_BODY = 2048;
+// Two-condition AND threshold for the shell check, in JS string code units
+// (compared against `md.length`). Tuned against the repro in issue #129: a
+// Twitter SPA shell post-#127 (data: URI strip) is ~2 KB of "enable
+// JavaScript" boilerplate; legitimate extracted articles are many KB even
+// when stubby. Lives next to looksLikeJsShell so any future retune touches
+// both signals together. If this ever exceeds JS_SHELL_SNIFF_CHARS, the
+// helper's window starts mattering end-to-end and needs an integration test.
+const JS_SHELL_MAX_CHARS = 2048;
 
 // Maximum honored Retry-After wait. Servers can legitimately ask for
 // minutes-to-hours waits (planned maintenance, daily quota resets); blocking
@@ -647,7 +666,11 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   //
   // No UA-swap retry like the CF path: this is a property of the page (no
   // server-rendered content for any UA), not of the request fingerprint.
-  if (md.length < JS_SHELL_MAX_BODY && looksLikeJsShell(md)) {
+  // Invariant: JS_SHELL_MAX_CHARS < JS_SHELL_SNIFF_CHARS, so md is always
+  // entirely inside the helper's sniff window when reached from here. The
+  // window's effect on the marker check is unreachable through fetchAsMarkdown
+  // until that ordering changes — see JS_SHELL_MAX_CHARS comment.
+  if (md.length < JS_SHELL_MAX_CHARS && looksLikeJsShell(md)) {
     throw new Error("Site requires JS, cannot fetch in shell-only mode (JS-only shell)");
   }
 

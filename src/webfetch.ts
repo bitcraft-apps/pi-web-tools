@@ -357,32 +357,28 @@ const JS_SHELL_MARKERS = [
   // "to (continue|use|view|run|access)" tail within ~40 chars so the marker
   // only fires on the imperative-instruction shape SPA shells use. The 40-char
   // window covers Twitter/X's "Please enable JavaScript and Cookies to continue"
-  // without re-admitting the bare phrase.
-  /\bplease enable JavaScript\b[^.]{0,40}\bto (continue|use|view|run|access)\b/i,
+  // without re-admitting the bare phrase. `[^.\n]` (not just `[^.]`) so the
+  // window can't span a paragraph break — html2md output frequently inserts
+  // newlines/emphasis between phrase fragments, and a tail-window crossing
+  // unrelated paragraphs would re-admit false positives the period-stop was
+  // meant to exclude.
+  /\bplease enable JavaScript\b[^.\n]{0,40}\bto (continue|use|view|run|access)\b/i,
   /\byou need to enable JavaScript to run this app\b/i,
   /\bthis website requires JavaScript\b/i,
 ];
 
-// Sniff window for marker presence, in JS string code units (not bytes — the
-// caller compares against `.length`, same unit). Numerically equal to
-// CF_SNIFF_BYTES because the rationale is the same (don't false-positive on
-// deep-body mentions of the marker phrase), but the unit differs, so it gets
-// its own name.
-const JS_SHELL_SNIFF_CHARS = 4096;
-
-// Marker presence in the first 4 KB of `text`. Same window-size rationale as
-// CF_SNIFF_BYTES: a real article that happens to mention "please enable
-// JavaScript" deep in its body (sidebar boilerplate, comment thread, an
-// article *about* JS-disabled UX) won't match. Caller pairs this with a hard
+// Marker presence anywhere in `text`. Caller pairs this with a hard
 // post-extraction size check (< 2 KB) — both conditions together are the
 // SPA-shell signature; either alone false-positives. Exported for unit tests.
 //
-// The slice is a no-op when called from fetchAsMarkdown (the 2 KB body cap
-// makes the input shorter than the window) — it exists for direct callers
-// of this exported helper.
+// No prefix-window slice (unlike CF sniffing): the AND gate's size cap is
+// already < 2 KB, so a deep-body false positive is structurally impossible
+// through fetchAsMarkdown. A separate sniff window would only matter for
+// direct callers passing arbitrarily large inputs — none exist in-repo, and
+// adding the slice "just in case" was unreachable code that lived only in a
+// unit test bypassing the AND.
 export function looksLikeJsShell(text: string): boolean {
-  const prefix = text.slice(0, JS_SHELL_SNIFF_CHARS);
-  return JS_SHELL_MARKERS.some((re) => re.test(prefix));
+  return JS_SHELL_MARKERS.some((re) => re.test(text));
 }
 
 // Two-condition AND threshold for the shell check, in JS string code units
@@ -390,8 +386,7 @@ export function looksLikeJsShell(text: string): boolean {
 // Twitter SPA shell post-#127 (data: URI strip) is ~2 KB of "enable
 // JavaScript" boilerplate; legitimate extracted articles are many KB even
 // when stubby. Lives next to looksLikeJsShell so any future retune touches
-// both signals together. If this ever exceeds JS_SHELL_SNIFF_CHARS, the
-// helper's window starts mattering end-to-end and needs an integration test.
+// both signals together.
 const JS_SHELL_MAX_CHARS = 2048;
 
 // Maximum honored Retry-After wait. Servers can legitimately ask for
@@ -526,6 +521,12 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     currentUa = OPENCODE_UA;
     ({ response, finalUrl } = await fetchWithRedirects(url, currentUa));
     if (await isCloudflareChallenge(response)) {
+      // Error-string contract: the parenthetical ("Cloudflare challenge" vs
+      // "JS-only shell") is the only discriminator between the two shell-mode
+      // refusal causes. Callers that need to branch on cause must substring-
+      // match the parenthetical. Keep the shape stable across both throw
+      // sites; if a third cause is ever added, promote to a structured error
+      // (e.g. an `code` field) rather than inventing a third parenthetical.
       throw new Error("Site requires JS, cannot fetch in shell-only mode (Cloudflare challenge)");
     }
   }
@@ -666,11 +667,20 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   //
   // No UA-swap retry like the CF path: this is a property of the page (no
   // server-rendered content for any UA), not of the request fingerprint.
-  // Invariant: JS_SHELL_MAX_CHARS < JS_SHELL_SNIFF_CHARS, so md is always
-  // entirely inside the helper's sniff window when reached from here. The
-  // window's effect on the marker check is unreachable through fetchAsMarkdown
-  // until that ordering changes — see JS_SHELL_MAX_CHARS comment.
-  if (md.length < JS_SHELL_MAX_CHARS && looksLikeJsShell(md)) {
+  //
+  // Order matters: cheap `md.length` check first so the regex scan is skipped
+  // for the common case of real articles (md ≥ 2 KB). Don't flip — a future
+  // refactor that runs the regex on every fetch pays the cost on the happy
+  // path for nothing.
+  //
+  // Fallback to raw `body` when the marker isn't in `md`: trafilatura can
+  // strip <noscript> fragments entirely, leaving an extracted-then-html2md
+  // output that's near-empty and marker-free even though the upstream HTML is
+  // a textbook SPA shell. Without this, the caller would receive a tiny
+  // blank-ish string instead of the actionable JS-only shell error. The
+  // `md.length < 2 KB` gate still bounds the false-positive risk: a real
+  // article that produces ≥ 2 KB of markdown is never rechecked against body.
+  if (md.length < JS_SHELL_MAX_CHARS && (looksLikeJsShell(md) || looksLikeJsShell(body))) {
     throw new Error("Site requires JS, cannot fetch in shell-only mode (JS-only shell)");
   }
 

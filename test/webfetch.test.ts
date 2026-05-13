@@ -1092,18 +1092,27 @@ describe("looksLikeJsShell (issue #129)", () => {
     expect(looksLikeJsShell(`<html><body>${phrase}</body></html>`)).toBe(true);
   });
 
-  it("is case-insensitive", () => {
-    expect(looksLikeJsShell("javascript IS NOT available")).toBe(true);
+  it.each([
+    "javascript IS NOT available",
+    "PLEASE ENABLE JAVASCRIPT to continue",
+    "You Need To Enable JavaScript To Run This App",
+    "THIS WEBSITE REQUIRES JAVASCRIPT to function",
+  ])("is case-insensitive: %s", (phrase) => {
+    // Parametrized over every marker so a future addition without `/i` fails
+    // here instead of silently shipping a case-sensitive matcher.
+    expect(looksLikeJsShell(phrase)).toBe(true);
   });
 
   it("returns false when no marker present", () => {
     expect(looksLikeJsShell("A perfectly normal article about web development.")).toBe(false);
   });
 
-  it("returns false when marker sits past the 4 KB sniff window", () => {
-    // Padding pushes the marker past byte 4096 — same tradeoff as CF sniffing.
-    const padding = "x".repeat(5000);
-    expect(looksLikeJsShell(`${padding}JavaScript is not available`)).toBe(false);
+  it("matches even when marker sits deep in input (no prefix-window slice)", () => {
+    // Direct callers can pass arbitrarily large input; the helper has no
+    // sniff window of its own — the AND gate's < 2 KB size cap upstream is
+    // what bounds deep-body false positives through fetchAsMarkdown.
+    const padding = "x".repeat(5000) + " ";
+    expect(looksLikeJsShell(`${padding}JavaScript is not available`)).toBe(true);
   });
 
   it("matches at the very start of input", () => {
@@ -1138,12 +1147,41 @@ describe("JS-only shell detection in fetchAsMarkdown (issue #129)", () => {
 
   it("does NOT throw when markdown is large even if it mentions the marker phrase", async () => {
     // Real article that happens to discuss JS-disabled UX in a sidebar.
+    // Marker at offset 0 — size gate alone must reject this.
     const longBody =
       "Please enable JavaScript to view comments. " + "Lorem ipsum dolor sit amet. ".repeat(200);
     vi.mocked(htmlToMarkdown).mockResolvedValueOnce(longBody);
     mockFetchOnce({ body: "<html><body>real article</body></html>" });
     const md = await fetchAsMarkdown({ url: "https://example.com" });
     expect(md).toContain("Lorem ipsum");
+  });
+
+  it("does NOT throw when markdown is large with the marker buried past 4 KB", async () => {
+    // Sibling of the above: marker at offset > 4096 in a > 2 KB body. Locks
+    // the size gate independently of marker position — the previous test
+    // could in principle have passed via a position-based short-circuit; this
+    // one can only pass via the size gate.
+    const padding = "Lorem ipsum dolor sit amet. ".repeat(200); // ~5.4 KB
+    const longBody = padding + "Please enable JavaScript to continue.";
+    expect(longBody.indexOf("Please enable JavaScript")).toBeGreaterThan(4096);
+    vi.mocked(htmlToMarkdown).mockResolvedValueOnce(longBody);
+    mockFetchOnce({ body: "<html><body>real article</body></html>" });
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(md).toContain("Lorem ipsum");
+  });
+
+  it("throws when marker survives only in raw body (extractor stripped <noscript>)", async () => {
+    // trafilatura/Readability often strip <noscript> entirely, leaving an
+    // extracted-then-html2md output that's near-empty and marker-free. Without
+    // the raw-body fallback the caller would receive a tiny blank string
+    // instead of the actionable JS-only shell error.
+    vi.mocked(htmlToMarkdown).mockResolvedValueOnce("Loading\u2026");
+    mockFetchOnce({
+      body: "<html><body><noscript>JavaScript is not available.</noscript><div id='app'></div></body></html>",
+    });
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
+      /Site requires JS, cannot fetch in shell-only mode \(JS-only shell\)/,
+    );
   });
 
   it("does NOT throw on short markdown without marker (e.g. tiny status page)", async () => {

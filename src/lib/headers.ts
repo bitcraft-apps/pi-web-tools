@@ -3,7 +3,23 @@ export const BROWSER_UA =
 
 export const OPENCODE_UA = "opencode";
 
-export const ACCEPT_HEADER = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+// Prefer markdown when the server supports content negotiation. A growing
+// class of high-traffic developer documentation sites (Cloudflare's
+// "Markdown for Agents", GitHub docs, Anthropic/Claude docs, Stripe API docs,
+// …) honor `Accept: text/markdown` and return clean, pre-rendered markdown,
+// often 90–99% smaller than the equivalent HTML page. classifyMime() routes
+// any text/* response (markdown, plain) through the verbatim text path, so
+// these responses bypass the trafilatura/pandoc pipeline entirely.
+//
+// HTML stays at q=0.9 — a small q-gap is the standard way to express
+// "prefer markdown but happily take HTML" without letting intermediaries
+// shuffle order, and it stays high enough that no compliant server downgrades
+// to */* when both are available. application/xhtml+xml and application/xml
+// remain because a handful of XHTML-strict sites still serve only those.
+// Servers that ignore the preference (the majority today) return HTML
+// byte-identical to before.
+export const ACCEPT_HEADER =
+  "text/markdown,text/html;q=0.9,application/xhtml+xml;q=0.9,application/xml;q=0.8,*/*;q=0.7";
 
 export const FETCH_TIMEOUT_MS = 30_000;
 export const MAX_RESPONSE_BYTES = 5 * 1024 * 1024; // 5 MB

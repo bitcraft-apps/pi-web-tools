@@ -350,6 +350,158 @@ describe("content extraction wire-in", () => {
   });
 });
 
+// Build a chrome-only HTML shell where the extractor's output (mocked via
+// tests) is suspect: passes the > 10 KB extractor gate but is < 1% of body
+// size, triggering the looksThin branch in fetchAsMarkdown. Module-scope so
+// it's not recreated on every call inside the describe (oxlint rule
+// no-loop-func / hoist-stable-helpers).
+function shellHtml(alternateTag: string): string {
+  return "<html><head>" + alternateTag + "</head><body>" + "x".repeat(20_000) + "</body></html>";
+}
+
+// Issue #128: when extraction is thin, follow a same-origin <link
+// rel="alternate"> in <head> with an allowlisted media type. Concrete
+// motivating case is YouTube's oEmbed endpoint surfacing title/author/etc.
+// when the watch-page HTML is a JS shell or login interstitial.
+describe("thin-extraction <link rel=alternate> fallback (issue #128)", () => {
+  const OEMBED_JSON_HREF = "https://example.com/oembed.json";
+
+  // Sequence-aware fetch mock: pop a Response per call. Distinct from
+  // mockFetchOnce because the alternate path issues two HTTP fetches.
+  function mockFetchSequence(
+    responses: Array<{
+      status?: number;
+      headers?: Record<string, string>;
+      body?: string | Uint8Array;
+    }>,
+  ): ReturnType<typeof vi.fn> {
+    const fn = vi.fn();
+    for (const r of responses) {
+      const headers = new Headers(r.headers ?? { "content-type": "text/html; charset=utf-8" });
+      const body = r.body ?? "";
+      const responseBody: BodyInit = typeof body === "string" ? body : new Uint8Array(body);
+      fn.mockResolvedValueOnce(new Response(responseBody, { status: r.status ?? 200, headers }));
+    }
+    vi.stubGlobal("fetch", fn);
+    return fn;
+  }
+
+  it("follows an oEmbed JSON alternate when extraction is thin", async () => {
+    // Page extraction returns ~tiny output for a 20 KB body: looksThin fires.
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}" title="Rick">`,
+    );
+    const fetchMock = mockFetchSequence([
+      { body: html },
+      {
+        body: '{"title":"Rick Astley","author_name":"Rick Astley"}',
+        headers: { "content-type": "application/json" },
+      },
+    ]);
+    const out = await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Second fetch hit the oEmbed URL exactly.
+    expect(fetchMock.mock.calls[1]![0]?.toString()).toBe(OEMBED_JSON_HREF);
+    // Output is the formatted oEmbed JSON, not the thin-extraction markdown.
+    expect(out).toContain("```json");
+    expect(out).toContain('"title": "Rick Astley"');
+    // htmlToMarkdown was bypassed entirely on the success path.
+    expect(htmlToMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("falls back to thin extraction on a cross-origin alternate (open-redirector defense)", async () => {
+    // A page can advertise an alternate at any URL; following cross-origin
+    // alternates would turn webfetch into an open redirector for the page
+    // author. This is the same-origin filter under test.
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="https://attacker.example/o.json">`,
+    );
+    const fetchMock = mockFetchSequence([{ body: html }]);
+    await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    // Only the original page was fetched; the alternate URL was rejected.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // We fell back to converting the full HTML.
+    expect(htmlToMarkdown).toHaveBeenCalled();
+  });
+
+  it("is unchanged when no alternate link is present", async () => {
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml("");
+    const fetchMock = mockFetchSequence([{ body: html }]);
+    await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(htmlToMarkdown).toHaveBeenCalledWith(html);
+  });
+
+  it("never follows an alternate when extraction is healthy (no extra HTTP)", async () => {
+    // Happy path: extracted is >= 1% of body. looksThin must be false so
+    // the alternate is never even considered — this is the cost-control
+    // contract for the 95% of pages where extraction works.
+    const fullHtml = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">`,
+    );
+    const extracted = "<article>" + "y".repeat(1_500) + "</article>"; // > 1% of 20 KB
+    vi.mocked(extractContent).mockResolvedValueOnce(extracted);
+    const fetchMock = mockFetchSequence([{ body: fullHtml }]);
+    await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(htmlToMarkdown).toHaveBeenCalledWith(extracted);
+  });
+
+  it("falls back to thin extraction when the alternate returns HTTP 4xx", async () => {
+    // First-match-wins: a failed oEmbed fetch does NOT trigger trying the
+    // next alternate. We surrender to the thin-extraction markdown.
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">`,
+    );
+    const fetchMock = mockFetchSequence([
+      { body: html },
+      { status: 404, body: "not found", headers: { "content-type": "text/plain" } },
+    ]);
+    await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(htmlToMarkdown).toHaveBeenCalledWith(html);
+  });
+
+  it("skips disallowed alternate types (RSS) and follows the next allowed one", async () => {
+    // findAlternates returns RSS entries too; the call site filters via
+    // the allowlist. This test pins that behavior end-to-end.
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/rss+xml" href="https://example.com/feed.rss">` +
+        `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">`,
+    );
+    const fetchMock = mockFetchSequence([
+      { body: html },
+      { body: '{"ok":true}', headers: { "content-type": "application/json" } },
+    ]);
+    const out = await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]![0]?.toString()).toBe(OEMBED_JSON_HREF);
+    expect(out).toContain('"ok": true');
+  });
+
+  it("resolves a relative alternate href against the page URL", async () => {
+    // YouTube ships absolute hrefs, but other oEmbed providers (Substack,
+    // self-hosted WordPress) often use relative paths. Resolution against
+    // the page URL must keep the result same-origin.
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="/api/oembed.json">`,
+    );
+    const fetchMock = mockFetchSequence([
+      { body: html },
+      { body: '{"x":1}', headers: { "content-type": "application/json" } },
+    ]);
+    await fetchAsMarkdown({ url: "https://example.com/post/hello" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]![0]?.toString()).toBe("https://example.com/api/oembed.json");
+  });
+});
+
 describe("charset decoding", () => {
   // "Łódź" in windows-1250: Ł=0xA3, ó=0xF3, d=0x64, ź=0x9F
   const POLISH_WIN1250 = new Uint8Array([0xa3, 0xf3, 0x64, 0x9f]);

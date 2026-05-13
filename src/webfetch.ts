@@ -3,6 +3,7 @@ import { validateUrl } from "./lib/url-guard.js";
 import { getSsrfAgent } from "./lib/ssrf-agent.js";
 import { htmlToMarkdown } from "./lib/html2md.js";
 import { extractContent } from "./lib/extract.js";
+import { findAlternates, ALLOWED_ALTERNATE_TYPES } from "./lib/alternates.js";
 import { pdfToText } from "./lib/pdf.js";
 import {
   ACCEPT_HEADER,
@@ -504,8 +505,130 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // null-check and then 0 < 100, so it correctly falls back.
   const extracted = body.length < 10_000 ? null : await extractContent(body, input.url);
   const useExtracted = extracted !== null && extracted.length >= 0.01 * body.length;
+
+  // Thin-extraction fallback (issue #128). When extraction produced
+  // nothing useful — same condition that triggers the existing full-HTML
+  // fallback, plus a hard floor of 200 chars so a 10-20 KB page with a
+  // borderline-1% extraction still qualifies — try following an
+  // allowlisted <link rel="alternate"> in <head>. The 200-char floor only
+  // adds anything in the 10-20 KB body range; above that 1% already
+  // implies > 200 chars.
+  //
+  // The check itself (HEAD scan + attribute tokenization) is cheap and
+  // runs only when extraction is suspect, so the happy path on the 95%
+  // of pages where extraction works is unchanged. The HTTP round-trip
+  // only fires when an allowlisted alternate is actually present —
+  // typically YouTube/Vimeo/Substack/etc.
+  const looksThin =
+    extracted === null || extracted.length < 200 || extracted.length < 0.01 * body.length;
+  if (looksThin) {
+    const alt = await tryFollowAlternate(body, input.url, currentUa);
+    if (alt !== null) return truncate(alt, maxChars);
+  }
+
   const md = await htmlToMarkdown(useExtracted ? extracted : body);
   return truncate(md, maxChars);
+}
+
+// Try to follow the first allowlisted, same-origin <link rel="alternate">
+// in `html` and return its formatted body, or null on any failure.
+//
+// Same-origin only: a page can advertise an alternate pointing anywhere
+// (`<link rel="alternate" href="https://attacker.example/...">`); following
+// cross-origin alternates would turn webfetch into an open redirector for
+// the page author. The SSRF guard alone isn't sufficient — public-IP
+// attackers aren't blocked by it. Same-origin is the natural trust boundary
+// for "alternate representation of *this* page."
+//
+// First match wins: if the first eligible alternate fails (HTTP error,
+// network failure, oversized body, unknown content type), we don't try the
+// next one — caller falls back to the thin extraction we already had.
+// Multi-attempt logic is latency we don't want on the unhappy path.
+//
+// All HTTP goes through `fetchWithRedirects` so SSRF guard, redirect cap,
+// and Retry-After all apply uniformly with the primary fetch.
+async function tryFollowAlternate(
+  html: string,
+  pageUrl: string,
+  ua: string,
+): Promise<string | null> {
+  const pageOrigin = new URL(pageUrl).origin;
+  for (const alt of findAlternates(html)) {
+    if (!ALLOWED_ALTERNATE_TYPES.has(alt.type)) continue;
+    let altUrl: URL;
+    try {
+      // `new URL(href, base)` resolves relative refs against the page URL;
+      // `validateUrl` re-applies the SSRF + scheme + blocked-host guard,
+      // so an alternate pointing at 169.254.169.254 (AWS IMDS) or
+      // 10.0.0.1 still gets rejected here, not just at fetch time.
+      altUrl = validateUrl(new URL(alt.url, pageUrl).toString());
+    } catch {
+      continue;
+    }
+    // Same-origin filter — see function-level comment for rationale.
+    if (altUrl.origin !== pageOrigin) continue;
+
+    let altResponse: Response;
+    try {
+      altResponse = await fetchWithRedirects(altUrl, ua);
+    } catch {
+      // Network failure / SSRF on a redirect / too-many-redirects: first
+      // match wins, so we surrender and let the caller use the thin
+      // extraction. Don't try the next alternate.
+      return null;
+    }
+    if (altResponse.status >= 400) {
+      try {
+        await altResponse.body?.cancel();
+      } catch {
+        /* already closed */
+      }
+      return null;
+    }
+    return await formatAlternateBody(altResponse);
+  }
+  return null;
+}
+
+// Decode + format an alternate response body. Mirrors the JSON/text branches
+// of `fetchAsMarkdown` (no truncation — caller applies max_chars), but skips
+// the HTML pipeline: none of the allowlisted alternate types are HTML, and
+// pulling extractor + pandoc into the alternate path would mean recursive
+// fallbacks. PDF and binary types are also rejected here for the same reason
+// — an alternate that claimed `application/json+oembed` and served PDF is
+// either misbehaving or hostile; bail out and let the caller fall back.
+async function formatAlternateBody(response: Response): Promise<string | null> {
+  const ct = response.headers.get("content-type") ?? "";
+  const kind = classifyMime(ct);
+  if (kind !== "json" && kind !== "text") return null;
+
+  // Mirror fetchAsMarkdown's content-length pre-check so an alternate
+  // server can't bypass the 5 MB cap by virtue of being a fallback path.
+  // readBoundedBody enforces the same cap from the stream regardless.
+  const cl = response.headers.get("content-length");
+  if (cl && Number(cl) > MAX_RESPONSE_BYTES) return null;
+
+  let body: string;
+  try {
+    body = await decodeBody(response, kind);
+  } catch {
+    // Oversize stream / decode failure: treat as alternate-not-usable and
+    // let the caller fall back to the thin extraction.
+    return null;
+  }
+
+  if (kind === "json") {
+    try {
+      const pretty = JSON.stringify(JSON.parse(body), null, 2);
+      return "```json\n" + pretty + "\n```";
+    } catch {
+      // Server lied about content-type or returned malformed JSON. Returning
+      // the raw body is still strictly better than the thin extraction we'd
+      // otherwise return — oEmbed XML, for instance, will land here.
+      return body;
+    }
+  }
+  return body;
 }
 
 const webfetchSchema = Type.Object({

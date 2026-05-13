@@ -70,7 +70,7 @@ export function findAlternates(html: string): Alternate[] {
   const head = headMatch[1] ?? "";
 
   // Strip HTML comments first so a commented-out <link> can't leak through.
-  // The global replace above removes only well-formed `<!-- ... -->` pairs,
+  // The global replace below removes only well-formed `<!-- ... -->` pairs,
   // so any `<!--` still in `scope` is by definition unterminated; truncate
   // the scan window at it to be safe — mirrors sniffHtmlMetaCharset's
   // defense.

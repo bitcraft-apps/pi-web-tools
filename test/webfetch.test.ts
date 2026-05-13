@@ -285,7 +285,10 @@ describe("content extraction wire-in", () => {
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(extractContent).toHaveBeenCalledWith(
       expect.stringContaining(article),
-      "https://example.com",
+      // Post-redirect (final) URL, normalized by `URL` — `https://example.com`
+      // round-trips to `https://example.com/`. Pin the normalized form so a
+      // future regression that reverts to the pre-redirect input.url is loud.
+      "https://example.com/",
     );
     expect(htmlToMarkdown).toHaveBeenCalledWith(article);
   });
@@ -474,11 +477,15 @@ describe("thin-extraction <link rel=alternate> fallback (issue #128)", () => {
 
   it("skips disallowed alternate types (RSS) and follows the next allowed one", async () => {
     // findAlternates returns RSS entries too; the call site filters via
-    // the allowlist. This test pins that behavior end-to-end.
+    // the allowlist. Three entries pin first-match-wins ordering end-to-
+    // end: RSS (denied) → oEmbed JSON (allowed, fetched) → markdown
+    // (allowed, must NOT be fetched). The mock sequence has only two
+    // entries, so a regression that fetches the third would throw.
     vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
     const html = shellHtml(
       `<link rel="alternate" type="application/rss+xml" href="https://example.com/feed.rss">` +
-        `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">`,
+        `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">` +
+        `<link rel="alternate" type="text/markdown" href="https://example.com/post.md">`,
     );
     const fetchMock = mockFetchSequence([
       { body: html },
@@ -532,6 +539,37 @@ describe("thin-extraction <link rel=alternate> fallback (issue #128)", () => {
     // (rejected) same-origin alternate. We then fall back to thin extraction.
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(htmlToMarkdown).toHaveBeenCalledWith(html);
+  });
+
+  it("resolves a relative alternate against the post-redirect URL (not input.url)", async () => {
+    // Regression for the redirect-origin gap flagged in PR #134 review:
+    // pageOrigin used to be derived from input.url, so a relative alternate
+    // href on a redirected page would resolve against the wrong origin and
+    // an absolute alternate on the post-redirect host would be rejected as
+    // cross-origin. fetchWithRedirects now hands back finalUrl and that's
+    // what the alternate path uses.
+    //
+    // Sequence: GET https://example.com/post → 302 to https://www.example.com/post
+    //           GET https://www.example.com/post → thin shell with relative
+    //                                                alternate href="/api/oembed.json"
+    //           GET https://www.example.com/api/oembed.json → oEmbed JSON
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="/api/oembed.json">`,
+    );
+    const fetchMock = mockFetchSequence([
+      { status: 302, headers: { location: "https://www.example.com/post" }, body: "" },
+      { body: html },
+      { body: '{"ok":true}', headers: { "content-type": "application/json" } },
+    ]);
+    const out = await fetchAsMarkdown({ url: "https://example.com/post" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const altCall = fetchMock.mock.calls[2]![0];
+    expect(altCall).toBeInstanceOf(URL);
+    if (!(altCall instanceof URL)) throw new Error("unreachable");
+    // Resolved against the post-redirect host, not example.com.
+    expect(altCall.href).toBe("https://www.example.com/api/oembed.json");
+    expect(out).toContain('"ok": true');
   });
 });
 

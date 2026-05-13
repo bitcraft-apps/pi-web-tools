@@ -241,13 +241,21 @@ async function fetchWithRedirects(
   url: URL,
   userAgent: string,
   requireSameOriginAs?: string,
-): Promise<Response> {
+): Promise<{ response: Response; finalUrl: URL }> {
   let current = url;
   for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
     const response = await doFetch(current, userAgent);
-    if (!isRedirect(response.status)) return response;
+    // `current` is the URL we issued this hop against; on a non-redirect (or
+    // a 3xx with no Location) it's the URL the caller should treat as the
+    // "page URL" for any subsequent same-origin / relative-href math. We
+    // can't rely on Response.url here: with `redirect: "manual"`, undici
+    // sets it to the URL of the underlying fetch call, which is correct
+    // hop-by-hop but only happens to equal the final URL because we re-
+    // issue manually. Returning `current` makes the contract explicit and
+    // survives any future change to that undici detail.
+    if (!isRedirect(response.status)) return { response, finalUrl: current };
     const location = response.headers.get("location");
-    if (!location) return response; // 3xx with no Location — let caller handle.
+    if (!location) return { response, finalUrl: current }; // 3xx with no Location — let caller handle.
     // Discard the redirect body (without draining) to free the connection.
     try {
       await response.body?.cancel();
@@ -421,7 +429,12 @@ async function maybeRetryAfter(response: Response, url: URL, ua: string): Promis
     /* locked or already closed — either way, nothing actionable here */
   }
   await new Promise((r) => setTimeout(r, waitMs));
-  return fetchWithRedirects(url, ua);
+  // Discard finalUrl: maybeRetryAfter only hands the post-retry response
+  // back to the caller, which already tracks the page URL via its own
+  // fetchWithRedirects call. The retry intentionally re-walks redirects
+  // from the original URL (see function comment), so finalUrl here would
+  // shadow rather than refine the caller's value.
+  return (await fetchWithRedirects(url, ua)).response;
 }
 
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
@@ -433,11 +446,11 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // is blocked, regardless of UA. The retry only fires when the first call
   // returned a Response that looks like a CF challenge.
   let currentUa = BROWSER_UA;
-  let response = await fetchWithRedirects(url, currentUa);
+  let { response, finalUrl } = await fetchWithRedirects(url, currentUa);
 
   if (await isCloudflareChallenge(response)) {
     currentUa = OPENCODE_UA;
-    response = await fetchWithRedirects(url, currentUa);
+    ({ response, finalUrl } = await fetchWithRedirects(url, currentUa));
     if (await isCloudflareChallenge(response)) {
       throw new Error("Site requires JS, cannot fetch in shell-only mode (Cloudflare challenge)");
     }
@@ -517,25 +530,37 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // correct; the 10 KB threshold is fuzzy for non-ASCII pages but doesn't
   // need to be tight. An extractor that returns literally "" passes the
   // null-check and then 0 < 100, so it correctly falls back.
-  const extracted = body.length < 10_000 ? null : await extractContent(body, input.url);
+  //
+  // Use `finalUrl` (post-redirect), not `input.url`: relative hrefs and
+  // base-URL resolution inside the extractor must reflect where the bytes
+  // actually came from. example.com → www.example.com would otherwise
+  // resolve `/foo` against the wrong host.
+  const extracted = body.length < 10_000 ? null : await extractContent(body, finalUrl.toString());
   const useExtracted = extracted !== null && extracted.length >= 0.01 * body.length;
 
-  // Thin-extraction fallback (issue #128). When extraction produced
-  // nothing useful — same condition that triggers the existing full-HTML
-  // fallback (negation of useExtracted), plus a hard floor of 200 chars
-  // so a 10-20 KB page with a borderline-1% extraction still qualifies —
-  // try following an allowlisted <link rel="alternate"> in <head>. The
-  // 200-char floor only adds anything in the 10-20 KB body range; above
-  // that 1% already implies > 200 chars.
+  // Thin-extraction fallback (issue #128). Fires only when the extractor
+  // *actually ran and returned thin output* — `extracted !== null` rules
+  // out both "body too small to bother" and "no extractor on $PATH /
+  // extractor failed" (extractContent returns null in both). Without that
+  // gate, every fetch on an extractor-less host would pay the alt-scan
+  // and a potential extra HTTP round-trip — contradicting the cost-control
+  // contract documented in the README.
   //
-  // The check itself (HEAD scan + attribute tokenization) is cheap and
-  // runs only when extraction is suspect, so the happy path on the 95%
-  // of pages where extraction works is unchanged. The HTTP round-trip
-  // only fires when an allowlisted alternate is actually present —
+  // "Thin" = the same condition that already disqualifies the extractor
+  // output for the main pipeline (`!useExtracted`, i.e. < 1% of body),
+  // plus a hard 200-char floor so a 10-20 KB page with a borderline-1%
+  // extraction still qualifies. Above 20 KB, 1% already implies > 200.
+  //
+  // The HEAD-scan itself (regex tokenization) is cheap; the HTTP round-
+  // trip only fires when an allowlisted alternate is actually present —
   // typically YouTube/Vimeo/Substack/etc.
-  const looksThin = !useExtracted || extracted.length < 200;
+  const looksThin =
+    extracted !== null && (!useExtracted || extracted.length < 200);
   if (looksThin) {
-    const alt = await tryFollowAlternate(body, input.url, currentUa);
+    // Same finalUrl rationale as above: alternate hrefs are resolved and
+    // same-origin-checked against the page we actually fetched, not the
+    // pre-redirect input.
+    const alt = await tryFollowAlternate(body, finalUrl.toString(), currentUa);
     if (alt !== null) return truncate(alt, maxChars);
   }
 
@@ -594,7 +619,10 @@ async function tryFollowAlternate(
 
     let altResponse: Response;
     try {
-      altResponse = await fetchWithRedirects(altUrl, ua, pageOrigin);
+      // Discard finalUrl on the alternate path: alternates are leaf
+      // fetches — we format the body and return, no further URL math
+      // depends on where the alternate ultimately landed.
+      ({ response: altResponse } = await fetchWithRedirects(altUrl, ua, pageOrigin));
     } catch {
       // Network failure / SSRF on a redirect / too-many-redirects: first
       // match wins, so we surrender and let the caller use the thin

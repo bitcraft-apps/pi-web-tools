@@ -337,6 +337,58 @@ async function readBodyPrefix(response: Response, max: number): Promise<string> 
 
 const CF_SNIFF_BYTES = 4096;
 
+// JS-only SPA shell detection (issue #129).
+//
+// Pages that are pure JavaScript SPAs return an HTML shell whose visible body
+// text is essentially "you need JavaScript to view this site." Without a
+// headless browser we have no real content to give the caller; returning the
+// shell wastes the max_chars budget and gives the LLM noise instead of an
+// actionable error. Mirrors the Cloudflare-challenge path: same error-message
+// shape ("Site requires JS, cannot fetch in shell-only mode (...)"), so users
+// and the model learn one mental model with two parenthetical sub-causes.
+//
+// Conservative phrase list — high precision, expanded only per real reproducer,
+// never speculatively. Add new markers the same way #127 added base64 strip
+// rules: from a measured failing URL.
+const JS_SHELL_MARKERS = [
+  /\bJavaScript is not available\b/i,
+  // "please enable JavaScript" alone is too loose — appears verbatim in many
+  // <noscript> fragments that survive extraction on legit pages. Require a
+  // "to (continue|use|view|run|access)" tail within ~40 chars so the marker
+  // only fires on the imperative-instruction shape SPA shells use. The 40-char
+  // window covers Twitter/X's "Please enable JavaScript and Cookies to continue"
+  // without re-admitting the bare phrase. `[^.\n]` (not just `[^.]`) so the
+  // window can't span a paragraph break — html2md output frequently inserts
+  // newlines/emphasis between phrase fragments, and a tail-window crossing
+  // unrelated paragraphs would re-admit false positives the period-stop was
+  // meant to exclude.
+  /\bplease enable JavaScript\b[^.\n\r]{0,40}\bto (continue|use|view|run|access)\b/i,
+  /\byou need to enable JavaScript to run this app\b/i,
+  /\bthis website requires JavaScript\b/i,
+];
+
+// Marker presence anywhere in `text`. Caller pairs this with a hard
+// post-extraction size check (< 2 KB) — both conditions together are the
+// SPA-shell signature; either alone false-positives. Exported for unit tests.
+//
+// No prefix-window slice (unlike CF sniffing): the AND gate's size cap is
+// already < 2 KB, so a deep-body false positive is structurally impossible
+// through fetchAsMarkdown. A separate sniff window would only matter for
+// direct callers passing arbitrarily large inputs — none exist in-repo, and
+// adding the slice "just in case" was unreachable code that lived only in a
+// unit test bypassing the AND.
+export function looksLikeJsShell(text: string): boolean {
+  return JS_SHELL_MARKERS.some((re) => re.test(text));
+}
+
+// Two-condition AND threshold for the shell check, in JS string code units
+// (compared against `md.length`). Tuned against the repro in issue #129: a
+// Twitter SPA shell post-#127 (data: URI strip) is ~2 KB of "enable
+// JavaScript" boilerplate; legitimate extracted articles are many KB even
+// when stubby. Lives next to looksLikeJsShell so any future retune touches
+// both signals together.
+const JS_SHELL_MAX_CHARS = 2048;
+
 // Maximum honored Retry-After wait. Servers can legitimately ask for
 // minutes-to-hours waits (planned maintenance, daily quota resets); blocking
 // an agent turn that long is worse UX than a clean error. The cap is the
@@ -469,6 +521,12 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     currentUa = OPENCODE_UA;
     ({ response, finalUrl } = await fetchWithRedirects(url, currentUa));
     if (await isCloudflareChallenge(response)) {
+      // Error-string contract: the parenthetical ("Cloudflare challenge" vs
+      // "JS-only shell") is the only discriminator between the two shell-mode
+      // refusal causes. Callers that need to branch on cause must substring-
+      // match the parenthetical. Keep the shape stable across both throw
+      // sites; if a third cause is ever added, promote to a structured error
+      // (e.g. an `code` field) rather than inventing a third parenthetical.
       throw new Error("Site requires JS, cannot fetch in shell-only mode (Cloudflare challenge)");
     }
   }
@@ -599,6 +657,40 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   }
 
   const md = await htmlToMarkdown(useExtracted ? extracted : body);
+
+  // Issue #129: SPA-shell detection runs *after* extraction + html2md, not
+  // against the raw body. A real article fetched via trafilatura is many KB;
+  // an SPA shell is a few hundred bytes of "enable JS" text plus chrome that
+  // the extractor strips. Post-extraction size is the discriminating signal,
+  // and it relies on #127's data: URI strip — without it, a Twitter shell is
+  // ~9 KB pre-strip and would slip past the 2 KB ceiling.
+  //
+  // No UA-swap retry like the CF path: this is a property of the page (no
+  // server-rendered content for any UA), not of the request fingerprint.
+  //
+  // Order matters: cheap `md.length` check first so the regex scan is skipped
+  // for the common case of real articles (md ≥ 2 KB). Don't flip — a future
+  // refactor that runs the regex on every fetch pays the cost on the happy
+  // path for nothing.
+  //
+  // Fallback to raw `body` when the marker isn't in `md`: trafilatura can
+  // strip <noscript> fragments entirely, leaving an extracted-then-html2md
+  // output that's near-empty and marker-free even though the upstream HTML is
+  // a textbook SPA shell. Without this, the caller would receive a tiny
+  // blank-ish string instead of the actionable JS-only shell error.
+  //
+  // <noscript> blocks are stripped before the body scan: every CRA/Next
+  // default template ships <noscript>You need to enable JavaScript to run
+  // this app</noscript>, and a page whose extraction merely degenerated
+  // (md < 2 KB but real content exists in the live DOM) would otherwise be
+  // replaced by the actionable error. Stripping <noscript> means only shells
+  // whose *visible* DOM carries the marker trip the fallback — which is the
+  // signature we actually want to catch.
+  const bodyVisible = body.replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, "");
+  if (md.length < JS_SHELL_MAX_CHARS && (looksLikeJsShell(md) || looksLikeJsShell(bodyVisible))) {
+    throw new Error("Site requires JS, cannot fetch in shell-only mode (JS-only shell)");
+  }
+
   return truncate(md, maxChars);
 }
 

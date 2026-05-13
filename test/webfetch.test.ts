@@ -21,7 +21,12 @@ vi.mock("../src/lib/pdf.js", () => ({
   pdfToText: vi.fn(async () => null),
 }));
 
-import { fetchAsMarkdown, parseRetryAfter, RETRY_AFTER_MAX_MS } from "../src/webfetch.js";
+import {
+  fetchAsMarkdown,
+  looksLikeJsShell,
+  parseRetryAfter,
+  RETRY_AFTER_MAX_MS,
+} from "../src/webfetch.js";
 import { htmlToMarkdown } from "../src/lib/html2md.js";
 import { extractContent } from "../src/lib/extract.js";
 import { pdfToText } from "../src/lib/pdf.js";
@@ -1072,6 +1077,141 @@ describe("Cloudflare retry hack", () => {
     // `totalChunks` would mean we drained the whole body.
     expect(enqueued).toBeLessThan(totalChunks);
     expect(enqueued).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("looksLikeJsShell (issue #129)", () => {
+  // Helper is marker-presence-only (no prefix-window slice); the body-size
+  // half of the AND lives in the caller. These tests pin both halves of that
+  // contract.
+  it.each([
+    "JavaScript is not available.",
+    "Please enable JavaScript to continue.",
+    "You need to enable JavaScript to run this app.",
+    "This website requires JavaScript to function.",
+  ])("matches marker phrase: %s", (phrase) => {
+    expect(looksLikeJsShell(`<html><body>${phrase}</body></html>`)).toBe(true);
+  });
+
+  it.each([
+    "javascript IS NOT available",
+    "PLEASE ENABLE JAVASCRIPT to continue",
+    "You Need To Enable JavaScript To Run This App",
+    "THIS WEBSITE REQUIRES JAVASCRIPT to function",
+  ])("is case-insensitive: %s", (phrase) => {
+    // Parametrized over every marker so a future addition without `/i` fails
+    // here instead of silently shipping a case-sensitive matcher.
+    expect(looksLikeJsShell(phrase)).toBe(true);
+  });
+
+  it("returns false when no marker present", () => {
+    expect(looksLikeJsShell("A perfectly normal article about web development.")).toBe(false);
+  });
+
+  it("matches even when marker sits deep in input (no prefix-window slice)", () => {
+    // Direct callers can pass arbitrarily large input; the helper has no
+    // sniff window of its own — the AND gate's < 2 KB size cap upstream is
+    // what bounds deep-body false positives through fetchAsMarkdown.
+    const padding = "x".repeat(5000) + " ";
+    expect(looksLikeJsShell(`${padding}JavaScript is not available`)).toBe(true);
+  });
+
+  it("matches at the very start of input", () => {
+    expect(looksLikeJsShell("JavaScript is not available somewhere")).toBe(true);
+  });
+
+  // Tightened post-review: bare "please enable JavaScript" is too common in
+  // legit <noscript> fragments. Require an imperative tail.
+  it("does NOT match bare 'please enable JavaScript' without imperative tail", () => {
+    expect(
+      looksLikeJsShell("Some features may not work. Please enable JavaScript. (legacy notice)"),
+    ).toBe(false);
+  });
+
+  it("matches Twitter/X-style 'and Cookies to continue' phrasing", () => {
+    expect(looksLikeJsShell("Please enable JavaScript and Cookies to continue using X.")).toBe(
+      true,
+    );
+  });
+});
+
+describe("JS-only shell detection in fetchAsMarkdown (issue #129)", () => {
+  it("throws JS-only shell error when markdown is short and contains marker", async () => {
+    vi.mocked(htmlToMarkdown).mockResolvedValueOnce(
+      "JavaScript is not available. We've detected that JavaScript is disabled.",
+    );
+    mockFetchOnce({ body: "<html><body>shell</body></html>" });
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
+      /Site requires JS, cannot fetch in shell-only mode \(JS-only shell\)/,
+    );
+  });
+
+  it("does NOT throw when markdown is large even if it mentions the marker phrase", async () => {
+    // Real article that happens to discuss JS-disabled UX in a sidebar.
+    // Marker at offset 0 — size gate alone must reject this.
+    const longBody =
+      "Please enable JavaScript to view comments. " + "Lorem ipsum dolor sit amet. ".repeat(200);
+    vi.mocked(htmlToMarkdown).mockResolvedValueOnce(longBody);
+    mockFetchOnce({ body: "<html><body>real article</body></html>" });
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(md).toContain("Lorem ipsum");
+  });
+
+  it("does NOT throw when markdown is large with the marker buried past 4 KB", async () => {
+    // Sibling of the above: marker at offset > 4096 in a > 2 KB body. Locks
+    // the size gate independently of marker position — the previous test
+    // could in principle have passed via a position-based short-circuit; this
+    // one can only pass via the size gate.
+    const padding = "Lorem ipsum dolor sit amet. ".repeat(200); // ~5.4 KB
+    const longBody = padding + "Please enable JavaScript to continue.";
+    expect(longBody.indexOf("Please enable JavaScript")).toBeGreaterThan(4096);
+    vi.mocked(htmlToMarkdown).mockResolvedValueOnce(longBody);
+    mockFetchOnce({ body: "<html><body>real article</body></html>" });
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(md).toContain("Lorem ipsum");
+  });
+
+  it("throws when marker survives only in raw body (extractor stripped live-DOM text)", async () => {
+    // trafilatura/Readability can drop near-empty bodies down to a loading
+    // string, leaving an extracted-then-html2md output that's marker-free even
+    // though the upstream HTML's *visible* DOM is a textbook SPA shell.
+    // Without the raw-body fallback the caller would receive a tiny blank
+    // string instead of the actionable JS-only shell error.
+    //
+    // Marker lives in a real DOM node (not <noscript>) on purpose: the body
+    // fallback strips <noscript> before scanning, so a CRA/Next default
+    // template's <noscript>You need to enable JavaScript…</noscript> on an
+    // otherwise-real page must NOT trip the shell error. See companion
+    // negative test below.
+    vi.mocked(htmlToMarkdown).mockResolvedValueOnce("Loading\u2026");
+    mockFetchOnce({
+      body: "<html><body><div id='app'>JavaScript is not available.</div></body></html>",
+    });
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
+      /Site requires JS, cannot fetch in shell-only mode \(JS-only shell\)/,
+    );
+  });
+
+  it("does NOT throw when marker only appears inside <noscript> (CRA/Next default)", async () => {
+    // Every CRA/Next scaffold ships <noscript>You need to enable JavaScript
+    // to run this app</noscript>. If extraction degenerates (md < 2 KB) on
+    // a legit page, the body fallback must not turn that boilerplate into
+    // an actionable error — only shells whose *visible* DOM is the marker
+    // should trip. Pins the scrub regex in the body-fallback path.
+    vi.mocked(htmlToMarkdown).mockResolvedValueOnce("Welcome.");
+    mockFetchOnce({
+      body: "<html><body><noscript>You need to enable JavaScript to run this app.</noscript><main>Welcome.</main></body></html>",
+    });
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(md).toContain("Welcome");
+  });
+
+  it("does NOT throw on short markdown without marker (e.g. tiny status page)", async () => {
+    // Short body but no JS-shell marker — a 200-char status page is legit.
+    vi.mocked(htmlToMarkdown).mockResolvedValueOnce("Service unavailable. Try again later.");
+    mockFetchOnce({ body: "<html><body>status</body></html>" });
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(md).toContain("Service unavailable");
   });
 });
 

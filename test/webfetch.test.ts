@@ -25,7 +25,7 @@ import { fetchAsMarkdown, parseRetryAfter, RETRY_AFTER_MAX_MS } from "../src/web
 import { htmlToMarkdown } from "../src/lib/html2md.js";
 import { extractContent } from "../src/lib/extract.js";
 import { pdfToText } from "../src/lib/pdf.js";
-import { MAX_RESPONSE_BYTES } from "../src/lib/headers.js";
+import { ACCEPT_HEADER, MAX_RESPONSE_BYTES } from "../src/lib/headers.js";
 
 function mockFetchOnce(opts: {
   status?: number;
@@ -173,6 +173,54 @@ describe("fetchAsMarkdown", () => {
     mockFetchOnce({ body: "# md", headers: { "content-type": "text/markdown" } });
     const md = await fetchAsMarkdown({ url: "https://example.com/x.md" });
     expect(md).toBe("# md");
+  });
+
+  // Issue #135: content-negotiated markdown.
+  // ACCEPT_HEADER is pinned to a literal so a future "let's simplify the
+  // header" change has to acknowledge what it's deleting. The order and
+  // q-values matter: markdown first (no q → q=1.0), HTML at q=0.9 so a
+  // compliant server prefers markdown but never downgrades to */* when both
+  // are available, and XHTML/XML kept for the handful of XHTML-strict sites.
+  it("ACCEPT_HEADER prefers markdown over HTML (issue #135)", () => {
+    expect(ACCEPT_HEADER).toBe(
+      "text/markdown,text/html;q=0.9,application/xhtml+xml;q=0.9,application/xml;q=0.8,*/*;q=0.7",
+    );
+  });
+
+  it("sends the markdown-preferring Accept header on every request", async () => {
+    mockFetchOnce({ body: "<h1>Hi</h1>" });
+    await fetchAsMarkdown({ url: "https://example.com" });
+    const fetchMock = vi.mocked(fetch);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = fetchMock.mock.calls[0]![1]!;
+    const headers = new Headers(init.headers);
+    expect(headers.get("accept")).toBe(ACCEPT_HEADER);
+  });
+
+  it("text/markdown response is returned verbatim and bypasses htmlToMarkdown (issue #135)", async () => {
+    // Server honored Accept: text/markdown and returned pre-rendered markdown.
+    // Must NOT route through pandoc/trafilatura — the whole point of the
+    // preference is to skip that pipeline. classifyMime sends text/* to the
+    // verbatim text branch.
+    const md = "# Heading\n\nA paragraph with [a link](https://example.com).";
+    mockFetchOnce({ body: md, headers: { "content-type": "text/markdown; charset=utf-8" } });
+    const out = await fetchAsMarkdown({ url: "https://docs.example.com/page" });
+    expect(out).toBe(md);
+    expect(htmlToMarkdown).not.toHaveBeenCalled();
+    expect(extractContent).not.toHaveBeenCalled();
+  });
+
+  it("text/html response (server ignored markdown preference) still goes through extractor + pandoc", async () => {
+    // Regression test for the 70%+ of sites that ignore Accept: text/markdown
+    // and serve HTML. The existing extraction pipeline must run unchanged
+    // — the Accept header change is a preference, not a contract. Body must
+    // be ≥ 10 KB to clear the small-body extractor bypass in webfetch.ts.
+    const filler = "<p>" + "x".repeat(11_000) + "</p>";
+    mockFetchOnce({ body: `<h1>Hello</h1>${filler}`, headers: { "content-type": "text/html" } });
+    const out = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(out).toContain("MD:"); // htmlToMarkdown mock prefix
+    expect(extractContent).toHaveBeenCalledTimes(1);
+    expect(htmlToMarkdown).toHaveBeenCalledTimes(1);
   });
 
   it("truncates output to max_chars with footer", async () => {

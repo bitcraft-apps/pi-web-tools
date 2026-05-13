@@ -21,7 +21,12 @@ vi.mock("../src/lib/pdf.js", () => ({
   pdfToText: vi.fn(async () => null),
 }));
 
-import { fetchAsMarkdown, parseRetryAfter, RETRY_AFTER_MAX_MS } from "../src/webfetch.js";
+import {
+  fetchAsMarkdown,
+  looksLikeJsShell,
+  parseRetryAfter,
+  RETRY_AFTER_MAX_MS,
+} from "../src/webfetch.js";
 import { htmlToMarkdown } from "../src/lib/html2md.js";
 import { extractContent } from "../src/lib/extract.js";
 import { pdfToText } from "../src/lib/pdf.js";
@@ -1072,6 +1077,67 @@ describe("Cloudflare retry hack", () => {
     // `totalChunks` would mean we drained the whole body.
     expect(enqueued).toBeLessThan(totalChunks);
     expect(enqueued).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("looksLikeJsShell (issue #129)", () => {
+  // Helper is marker-presence-only on the first 4 KB; the body-size half of
+  // the AND lives in the caller. These tests pin both halves of that contract.
+  it.each([
+    "JavaScript is not available.",
+    "Please enable JavaScript to continue.",
+    "You need to enable JavaScript to run this app.",
+    "This website requires JavaScript to function.",
+  ])("matches marker phrase: %s", (phrase) => {
+    expect(looksLikeJsShell(`<html><body>${phrase}</body></html>`)).toBe(true);
+  });
+
+  it("is case-insensitive", () => {
+    expect(looksLikeJsShell("javascript IS NOT available")).toBe(true);
+  });
+
+  it("returns false when no marker present", () => {
+    expect(looksLikeJsShell("A perfectly normal article about web development.")).toBe(false);
+  });
+
+  it("returns false when marker sits past the 4 KB sniff window", () => {
+    // Padding pushes the marker past byte 4096 — same tradeoff as CF sniffing.
+    const padding = "x".repeat(5000);
+    expect(looksLikeJsShell(`${padding}JavaScript is not available`)).toBe(false);
+  });
+
+  it("matches at the very start of input", () => {
+    expect(looksLikeJsShell("JavaScript is not available somewhere")).toBe(true);
+  });
+});
+
+describe("JS-only shell detection in fetchAsMarkdown (issue #129)", () => {
+  it("throws JS-only shell error when markdown is short and contains marker", async () => {
+    vi.mocked(htmlToMarkdown).mockResolvedValueOnce(
+      "JavaScript is not available. We've detected that JavaScript is disabled.",
+    );
+    mockFetchOnce({ body: "<html><body>shell</body></html>" });
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
+      /Site requires JS, cannot fetch in shell-only mode \(JS-only shell\)/,
+    );
+  });
+
+  it("does NOT throw when markdown is large even if it mentions the marker phrase", async () => {
+    // Real article that happens to discuss JS-disabled UX in a sidebar.
+    const longBody =
+      "Please enable JavaScript to view comments. " + "Lorem ipsum dolor sit amet. ".repeat(200);
+    vi.mocked(htmlToMarkdown).mockResolvedValueOnce(longBody);
+    mockFetchOnce({ body: "<html><body>real article</body></html>" });
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(md).toContain("Lorem ipsum");
+  });
+
+  it("does NOT throw on short markdown without marker (e.g. tiny status page)", async () => {
+    // Short body but no JS-shell marker — a 200-char status page is legit.
+    vi.mocked(htmlToMarkdown).mockResolvedValueOnce("Service unavailable. Try again later.");
+    mockFetchOnce({ body: "<html><body>status</body></html>" });
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(md).toContain("Service unavailable");
   });
 });
 

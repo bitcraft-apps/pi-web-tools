@@ -337,6 +337,44 @@ async function readBodyPrefix(response: Response, max: number): Promise<string> 
 
 const CF_SNIFF_BYTES = 4096;
 
+// JS-only SPA shell detection (issue #129).
+//
+// Pages that are pure JavaScript SPAs return an HTML shell whose visible body
+// text is essentially "you need JavaScript to view this site." Without a
+// headless browser we have no real content to give the caller; returning the
+// shell wastes the max_chars budget and gives the LLM noise instead of an
+// actionable error. Mirrors the Cloudflare-challenge path: same error-message
+// shape ("Site requires JS, cannot fetch in shell-only mode (...)"), so users
+// and the model learn one mental model with two parenthetical sub-causes.
+//
+// Conservative phrase list — high precision, expanded only per real reproducer,
+// never speculatively. Add new markers the same way #127 added base64 strip
+// rules: from a measured failing URL.
+const JS_SHELL_MARKERS = [
+  /\bJavaScript is not available\b/i,
+  /\bplease enable JavaScript\b/i,
+  /\byou need to enable JavaScript to run this app\b/i,
+  /\bthis website requires JavaScript\b/i,
+];
+
+// Marker presence in the first 4 KB of `text`. Same window as CF_SNIFF_BYTES
+// for the same reason: a real article that happens to mention "please enable
+// JavaScript" deep in its body (sidebar boilerplate, comment thread, an
+// article *about* JS-disabled UX) won't match. Caller pairs this with a hard
+// post-extraction size check (< 2 KB) — both conditions together are the
+// SPA-shell signature; either alone false-positives. Exported for unit tests.
+export function looksLikeJsShell(text: string): boolean {
+  const prefix = text.slice(0, CF_SNIFF_BYTES);
+  return JS_SHELL_MARKERS.some((re) => re.test(prefix));
+}
+
+// Two-condition AND threshold for the shell check. Tuned against the
+// repro in issue #129: a Twitter SPA shell post-#127 (data: URI strip) is
+// ~2 KB of "enable JavaScript" boilerplate; legitimate extracted articles
+// are many KB even when stubby. Lives next to looksLikeJsShell so any future
+// retune touches both signals together.
+const JS_SHELL_MAX_BODY = 2048;
+
 // Maximum honored Retry-After wait. Servers can legitimately ask for
 // minutes-to-hours waits (planned maintenance, daily quota resets); blocking
 // an agent turn that long is worse UX than a clean error. The cap is the
@@ -599,6 +637,20 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   }
 
   const md = await htmlToMarkdown(useExtracted ? extracted : body);
+
+  // Issue #129: SPA-shell detection runs *after* extraction + html2md, not
+  // against the raw body. A real article fetched via trafilatura is many KB;
+  // an SPA shell is a few hundred bytes of "enable JS" text plus chrome that
+  // the extractor strips. Post-extraction size is the discriminating signal,
+  // and it relies on #127's data: URI strip — without it, a Twitter shell is
+  // ~9 KB pre-strip and would slip past the 2 KB ceiling.
+  //
+  // No UA-swap retry like the CF path: this is a property of the page (no
+  // server-rendered content for any UA), not of the request fingerprint.
+  if (md.length < JS_SHELL_MAX_BODY && looksLikeJsShell(md)) {
+    throw new Error("Site requires JS, cannot fetch in shell-only mode (JS-only shell)");
+  }
+
   return truncate(md, maxChars);
 }
 

@@ -97,6 +97,20 @@ describe("htmlToMarkdown", () => {
     );
     expect(md).toBe("![](data:image/png;base64,…)\n");
   });
+
+  it("strips base64 data: URI payloads from w3m output too (issue #127)", async () => {
+    const w3mOut = "Image: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA\n";
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
+      if (cmd === "which" && args[0] === "pandoc") return fakeChild("", 1);
+      if (cmd === "which" && args[0] === "w3m") return fakeChild("/usr/bin/w3m\n", 0);
+      if (cmd === "w3m") return fakeChild(w3mOut, 0);
+      return fakeChild("", 1);
+    });
+    const md = await htmlToMarkdown(
+      '<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA">',
+    );
+    expect(md).toBe("Image: data:image/png;base64,…\n");
+  });
 });
 
 describe("stripBase64DataUris", () => {

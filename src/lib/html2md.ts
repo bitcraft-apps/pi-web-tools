@@ -78,11 +78,22 @@ function runConverter(cmd: string, args: string[], stdin: string): Promise<strin
 // alphabet, which neatly terminates inside `![](...)`, `<a href="...">`,
 // and bare-URL contexts without dragging in surrounding markdown.
 //
+// Notes on the character classes:
+//   - Subtype is `+` (not `*`): both type and subtype are required per
+//     RFC 2045, so `data:image/;base64,...` is malformed and we don't
+//     want to elide it (better to leave obviously-broken input visible).
+//   - Parameter values are unquoted only. RFC 2045 permits quoted-string
+//     values (`;name="foo bar"`) but pandoc/w3m have never been observed
+//     to emit them inside data: URIs in practice; revisit if seen.
+//   - Base64 alphabet is the standard RFC 4648 set (`+/=`); URL-safe
+//     `-_` is intentionally omitted because RFC 2397 mandates standard
+//     alphabet for `data:` URIs. Don't "fix" this.
+//
 // Plain (non-base64) `data:` URIs are intentionally left alone — they're
 // short and can carry actual readable content (`data:text/plain,Hello`).
 // The win is entirely on the base64 path; see issue #127.
 const DATA_URI_BASE64 =
-  /data:([a-z][a-z0-9+\-.]*\/[a-z0-9+\-.]*(?:;[a-zA-Z0-9_+\-.=]+)*);base64,[A-Za-z0-9+/=]+/gi;
+  /data:([a-z][a-z0-9+\-.]*\/[a-z0-9+\-.]+(?:;[a-zA-Z0-9_+\-.=]+)*);base64,[A-Za-z0-9+/=]+/gi;
 
 /**
  * Replace the body of every base64 `data:` URI in `md` with `…`, keeping

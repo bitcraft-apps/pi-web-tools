@@ -245,17 +245,23 @@ async function fetchWithRedirects(
   let current = url;
   for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
     const response = await doFetch(current, userAgent);
-    // `current` is the URL we issued this hop against; on a non-redirect (or
-    // a 3xx with no Location) it's the URL the caller should treat as the
-    // "page URL" for any subsequent same-origin / relative-href math. We
-    // can't rely on Response.url here: with `redirect: "manual"`, undici
-    // sets it to the URL of the underlying fetch call, which is correct
-    // hop-by-hop but only happens to equal the final URL because we re-
-    // issue manually. Returning `current` makes the contract explicit and
-    // survives any future change to that undici detail.
+    // Both branches below return `current` as `finalUrl`: it's the URL we
+    // issued this hop against, and therefore the URL of the response we're
+    // handing back to the caller ("where the bytes came from"). Callers
+    // treat it as the page URL for same-origin checks and relative-href
+    // resolution. We can't rely on Response.url here: with
+    // `redirect: "manual"`, undici sets it to the URL of the underlying
+    // fetch call, which is correct hop-by-hop but only happens to equal
+    // the final URL because we re-issue manually. Returning `current`
+    // makes the contract explicit and survives any future change to that
+    // undici detail.
     if (!isRedirect(response.status)) return { response, finalUrl: current };
     const location = response.headers.get("location");
-    if (!location) return { response, finalUrl: current }; // 3xx with no Location — let caller handle.
+    // 3xx with no Location: response is malformed but real (some misconfigured
+    // origins do this on 304-without-cache-validators). Hand it back with the
+    // URL we issued against as finalUrl — same contract as the non-redirect
+    // branch above.
+    if (!location) return { response, finalUrl: current };
     // Discard the redirect body (without draining) to free the connection.
     try {
       await response.body?.cancel();
@@ -405,7 +411,19 @@ async function isCloudflareChallenge(response: Response): Promise<boolean> {
 // 302s on the first attempt and 429s with a Retry-After on the second.
 // Mild cost: an extra round-trip on the (rare) chained-redirect-then-rate-
 // limit path. Worth it.
-async function maybeRetryAfter(response: Response, url: URL, ua: string): Promise<Response | null> {
+//
+// Returns `{response, finalUrl}` (not just response) because the retry walks
+// redirects from the original URL, and the post-retry chain may legitimately
+// land on a different origin than the pre-retry one (e.g. server flips from
+// a localized interstitial to the canonical host on the second attempt). The
+// caller MUST replace its existing `finalUrl` with this one — otherwise the
+// extractor and alternate-link path would do same-origin and relative-href
+// math against the stale pre-retry origin.
+async function maybeRetryAfter(
+  response: Response,
+  url: URL,
+  ua: string,
+): Promise<{ response: Response; finalUrl: URL } | null> {
   if (response.status !== 429 && response.status !== 503) return null;
   const waitMs = parseRetryAfter(response.headers.get("retry-after"));
   if (waitMs === null) return null;
@@ -429,12 +447,11 @@ async function maybeRetryAfter(response: Response, url: URL, ua: string): Promis
     /* locked or already closed — either way, nothing actionable here */
   }
   await new Promise((r) => setTimeout(r, waitMs));
-  // Discard finalUrl: maybeRetryAfter only hands the post-retry response
-  // back to the caller, which already tracks the page URL via its own
-  // fetchWithRedirects call. The retry intentionally re-walks redirects
-  // from the original URL (see function comment), so finalUrl here would
-  // shadow rather than refine the caller's value.
-  return (await fetchWithRedirects(url, ua)).response;
+  // Hand back finalUrl too — see function comment for why the caller must
+  // refresh its own `finalUrl` from this. The retry intentionally re-walks
+  // redirects from the original URL, so the post-retry chain can land on a
+  // different final URL than the pre-retry one.
+  return await fetchWithRedirects(url, ua);
 }
 
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
@@ -456,7 +473,13 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     }
   }
 
-  response = (await maybeRetryAfter(response, url, currentUa)) ?? response;
+  // Refresh finalUrl from the retry: a post-retry redirect chain may land
+  // on a different origin than the pre-retry one (see maybeRetryAfter). If
+  // we kept the stale finalUrl, the extractor below and tryFollowAlternate
+  // would resolve relative hrefs and do same-origin checks against the
+  // wrong page URL.
+  const retried = await maybeRetryAfter(response, url, currentUa);
+  if (retried !== null) ({ response, finalUrl } = retried);
 
   if (response.status >= 400) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -571,7 +594,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     // Same finalUrl rationale as above: alternate hrefs are resolved and
     // same-origin-checked against the page we actually fetched, not the
     // pre-redirect input.
-    const alt = await tryFollowAlternate(body, finalUrl.toString(), currentUa);
+    const alt = await tryFollowAlternate(body, finalUrl, currentUa);
     if (alt !== null) return truncate(alt, maxChars);
   }
 
@@ -599,13 +622,11 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
 //
 // All HTTP goes through `fetchWithRedirects` so SSRF guard, redirect cap,
 // and Retry-After all apply uniformly with the primary fetch.
-async function tryFollowAlternate(
-  html: string,
-  pageUrl: string,
-  ua: string,
-): Promise<string | null> {
-  const pageUrlParsed = new URL(pageUrl);
-  const pageOrigin = pageUrlParsed.origin;
+async function tryFollowAlternate(html: string, pageUrl: URL, ua: string): Promise<string | null> {
+  // pageUrl arrives as a URL object (not a string) so we don't re-parse
+  // here just to call `.origin` and pass to `new URL(href, base)`. The
+  // URL constructor accepts a URL as its base argument directly.
+  const pageOrigin = pageUrl.origin;
   // Asymmetry note: pre-HTTP filters — allowlist miss, malformed/SSRF-
   // rejected URL, cross-origin href — use `continue` (skip this entry, try
   // the next). Post-HTTP failures — network error, 4xx/5xx, unparseable
@@ -621,7 +642,7 @@ async function tryFollowAlternate(
       // `validateUrl` re-applies the SSRF + scheme + blocked-host guard,
       // so an alternate pointing at 169.254.169.254 (AWS IMDS) or
       // 10.0.0.1 still gets rejected here, not just at fetch time.
-      altUrl = validateUrl(new URL(alt.url, pageUrlParsed).toString());
+      altUrl = validateUrl(new URL(alt.url, pageUrl).toString());
     } catch {
       continue;
     }
@@ -689,6 +710,13 @@ async function formatAlternateBody(response: Response): Promise<string | null> {
   const cl = response.headers.get("content-length");
   const clNum = cl ? Number(cl) : NaN;
   if (Number.isFinite(clNum) && clNum > MAX_RESPONSE_BYTES) {
+    // Surface the rejection: an oversize alternate is a deliberate skip,
+    // not a bug, but a debugging operator who sees thin extraction returned
+    // for a page that *does* advertise an alternate has no way to tell why
+    // without this line. Mirrors the over-cap Retry-After warn above.
+    console.warn(
+      `webfetch: ignoring oversize alternate (${(clNum / 1024 / 1024).toFixed(1)} MB, max ${MAX_RESPONSE_MB}); falling back to thin extraction`,
+    );
     await cancel();
     return null;
   }

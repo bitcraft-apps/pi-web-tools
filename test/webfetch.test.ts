@@ -625,6 +625,42 @@ describe("thin-extraction <link rel=alternate> fallback (issue #128)", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(htmlToMarkdown).toHaveBeenCalledWith(extracted);
   });
+
+  it("pins the && semantics at the exact boundary (199 chars, 1% gate just passes)", async () => {
+    // Boundary regression for the `&& extracted.length < 200` half of the
+    // looksThin gate (PR #134 review): a future refactor to `||` would
+    // discard a 199-char extraction even when the 1% gate already passed,
+    // surfacing an oEmbed stub in place of legitimate-but-short content.
+    //
+    // Construction: 199-char extraction on a body sized so that
+    //   199 >= 0.01 * body.length        (1% gate passes → useExtracted=true)
+    //   199 < 200                         (length floor would trigger alone)
+    // Both gates are wired with `&&`, so looksThin is false and zero alt
+    // fetches happen. With `||`, length<200 would dominate — alt would fire.
+    const extracted = "<article>" + "y".repeat(199 - "<article></article>".length) + "</article>";
+    expect(extracted).toHaveLength(199);
+    // Pad body so total length sits at exactly 19_800 chars: 199/19_800 ≈
+    // 1.005% — the 1% gate passes by ~1 char of headroom. Tightest
+    // boundary that still proves the AND semantics.
+    const targetBodyLen = 19_800;
+    const head =
+      "<html><head>" +
+      `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">` +
+      "</head><body>";
+    const tail = "</body></html>";
+    const shortBody = head + "x".repeat(targetBodyLen - head.length - tail.length) + tail;
+    expect(shortBody).toHaveLength(targetBodyLen);
+    expect(extracted.length).toBeGreaterThanOrEqual(0.01 * shortBody.length); // 1% gate passes
+    expect(extracted.length).toBeLessThan(200); // length floor would trigger alone
+    vi.mocked(extractContent).mockResolvedValueOnce(extracted);
+    const fetchMock = mockFetchSequence([{ body: shortBody }]);
+    await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    // No alternate fetch: useExtracted is true (1% gate), so looksThin is
+    // false regardless of the < 200 floor. An accidental `||` would also
+    // pass length check (199 < 200) and trigger an alternate fetch.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(htmlToMarkdown).toHaveBeenCalledWith(extracted);
+  });
 });
 
 describe("charset decoding", () => {

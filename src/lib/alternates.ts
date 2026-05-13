@@ -20,10 +20,21 @@
 //                                                non-goals).
 export const ALLOWED_ALTERNATE_TYPES: ReadonlySet<string> = new Set([
   // oEmbed standard JSON form. Highest signal: YouTube, Vimeo, Flickr,
-  // SoundCloud, WordPress.com, Substack, Spotify, DeviantArt, Slideshare.
+  // WordPress.com, Substack, Spotify, DeviantArt, Slideshare.
   "application/json+oembed",
   // oEmbed XML form — same providers, less common.
   "application/xml+oembed",
+  // Real-world variants verified against live HTML during PR #134 review:
+  //   - YouTube ships `text/xml+oembed` (NOT `application/xml+oembed`)
+  //   - SoundCloud ships both `text/xml+oembed` and `text/json+oembed`
+  // The oEmbed spec itself only blesses the `application/*+oembed` forms,
+  // but allowlisting the `text/*+oembed` siblings costs nothing (the
+  // `+oembed` suffix is the discriminating signal, not the top-level type)
+  // and unlocks the motivating providers. Anything without the literal
+  // `+oembed` suffix — plain `application/json`, `text/xml` — stays out:
+  // those are catch-all generic-data hints with no contract about content.
+  "text/xml+oembed",
+  "text/json+oembed",
   // Author-served markdown alternate. Rare, but unambiguous when present.
   "text/markdown",
 ]);
@@ -58,11 +69,22 @@ export interface Alternate {
 // Without this scope a stray <link rel="alternate"> in <body> (some sites
 // inject in-content video embeds with link tags) would be picked up too,
 // against the spec — alternate-link discovery is a <head>-only mechanism.
+// Known limitation: HEAD_RE / LINK_RE both terminate the tag at the first
+// `>`, which is wrong for the (rare but legal) case of an attribute value
+// containing a literal `>` inside quotes — e.g. `<link title="a>b" ...>`.
+// HTML5 doesn't actually require quoting `>` in attribute values, so this
+// is technically a parser bug. In practice it's a non-issue: the only
+// allowlisted attribute we read is `href` (URL-escaped) and `type` (a
+// media-type token); a stray `>` would only ever land in `title`, and the
+// truncated tag we'd then process still has well-formed `rel`/`type`/`href`
+// attributes if any followed the title. Documenting rather than fixing
+// because a real HTML tokenizer here would be wildly out of scope.
+// Same anti-substring-match rationale as the meta-charset sniffer in
+// webfetch.ts — keep these two regexes in sync if either grows attribute-
+// syntax support.
 const HEAD_RE = /<head\b[^>]*>([\s\S]*?)(?:<\/head\s*>|<body\b|$)/i;
 const LINK_RE = /<link\b([^>]*)>/gi;
-// Same attribute tokenizer as the meta-charset sniffer in webfetch.ts —
-// see that file for the anti-substring-match rationale. Keep these two
-// regexes in sync if either grows attribute-syntax support.
+// Same attribute tokenizer as the meta-charset sniffer in webfetch.ts.
 const ATTR_RE = /([A-Za-z_:][A-Za-z0-9_.:-]*)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>`]+)))?/g;
 
 /**

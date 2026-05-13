@@ -401,8 +401,14 @@ describe("thin-extraction <link rel=alternate> fallback (issue #128)", () => {
     ]);
     const out = await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    // Second fetch hit the oEmbed URL exactly.
-    expect(fetchMock.mock.calls[1]![0]?.toString()).toBe(OEMBED_JSON_HREF);
+    // Second fetch hit the oEmbed URL exactly. fetchWithRedirects passes a
+    // URL object to fetch, not a string — assert against URL directly so a
+    // future shape change (e.g. Request) is a loud test failure rather than
+    // a silent toString match.
+    const altCall = fetchMock.mock.calls[1]![0];
+    expect(altCall).toBeInstanceOf(URL);
+    if (!(altCall instanceof URL)) throw new Error("unreachable");
+    expect(altCall.href).toBe(OEMBED_JSON_HREF);
     // Output is the formatted oEmbed JSON, not the thin-extraction markdown.
     expect(out).toContain("```json");
     expect(out).toContain('"title": "Rick Astley"');
@@ -480,7 +486,10 @@ describe("thin-extraction <link rel=alternate> fallback (issue #128)", () => {
     ]);
     const out = await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[1]![0]?.toString()).toBe(OEMBED_JSON_HREF);
+    const altCall = fetchMock.mock.calls[1]![0];
+    expect(altCall).toBeInstanceOf(URL);
+    if (!(altCall instanceof URL)) throw new Error("unreachable");
+    expect(altCall.href).toBe(OEMBED_JSON_HREF);
     expect(out).toContain('"ok": true');
   });
 
@@ -498,7 +507,31 @@ describe("thin-extraction <link rel=alternate> fallback (issue #128)", () => {
     ]);
     await fetchAsMarkdown({ url: "https://example.com/post/hello" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls[1]![0]?.toString()).toBe("https://example.com/api/oembed.json");
+    const altCall = fetchMock.mock.calls[1]![0];
+    expect(altCall).toBeInstanceOf(URL);
+    if (!(altCall instanceof URL)) throw new Error("unreachable");
+    expect(altCall.href).toBe("https://example.com/api/oembed.json");
+  });
+
+  it("falls back when a same-origin alternate redirects cross-origin", async () => {
+    // The same-origin filter is enforced on the advertised href, but
+    // fetchWithRedirects follows redirects — so a same-origin alternate
+    // that 302s to attacker.example would be followed without a post-
+    // redirect re-check. Pin that re-check: the cross-origin Location
+    // throws inside fetchWithRedirects and we surrender to thin extraction.
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">`,
+    );
+    const fetchMock = mockFetchSequence([
+      { body: html },
+      { status: 302, headers: { location: "https://attacker.example/o.json" }, body: "" },
+    ]);
+    await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    // The redirect target is never fetched: only the original page and the
+    // (rejected) same-origin alternate. We then fall back to thin extraction.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(htmlToMarkdown).toHaveBeenCalledWith(html);
   });
 });
 

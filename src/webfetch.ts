@@ -220,6 +220,11 @@ function isRedirect(status: number): boolean {
 }
 
 // Follow up to MAX_REDIRECTS hops, re-running validateUrl on each Location.
+// `requireSameOriginAs`, when set, additionally enforces that every post-redirect
+// URL stays within the given origin — used by the alternate-link fallback so
+// a same-origin alternate can't 302 to an attacker origin (validateUrl alone
+// blocks private IPs, not arbitrary public hosts).
+//
 // Without this, `redirect: "follow"` would silently bypass the SSRF guard:
 // a public host can 302 to http://10.0.0.1, http://169.254.169.254 (AWS IMDS),
 // http://localhost, etc., and the URL guard only saw the original input.
@@ -232,7 +237,11 @@ function isRedirect(status: number): boolean {
 // preserve method+body) collapse to "always GET" — we just re-issue at the
 // new URL with the same UA. If this ever grows POST support, add downgrade
 // handling here.
-async function fetchWithRedirects(url: URL, userAgent: string): Promise<Response> {
+async function fetchWithRedirects(
+  url: URL,
+  userAgent: string,
+  requireSameOriginAs?: string,
+): Promise<Response> {
   let current = url;
   for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
     const response = await doFetch(current, userAgent);
@@ -256,6 +265,11 @@ async function fetchWithRedirects(url: URL, userAgent: string): Promise<Response
     // Cheap today (pure parsing + regex, no DNS); revisit if validateUrl ever
     // grows expensive checks.
     current = validateUrl(next.toString());
+    if (requireSameOriginAs !== undefined && current.origin !== requireSameOriginAs) {
+      throw new Error(
+        `Cross-origin redirect from ${requireSameOriginAs} to ${current.origin} blocked`,
+      );
+    }
   }
   throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
 }
@@ -508,19 +522,18 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
 
   // Thin-extraction fallback (issue #128). When extraction produced
   // nothing useful — same condition that triggers the existing full-HTML
-  // fallback, plus a hard floor of 200 chars so a 10-20 KB page with a
-  // borderline-1% extraction still qualifies — try following an
-  // allowlisted <link rel="alternate"> in <head>. The 200-char floor only
-  // adds anything in the 10-20 KB body range; above that 1% already
-  // implies > 200 chars.
+  // fallback (negation of useExtracted), plus a hard floor of 200 chars
+  // so a 10-20 KB page with a borderline-1% extraction still qualifies —
+  // try following an allowlisted <link rel="alternate"> in <head>. The
+  // 200-char floor only adds anything in the 10-20 KB body range; above
+  // that 1% already implies > 200 chars.
   //
   // The check itself (HEAD scan + attribute tokenization) is cheap and
   // runs only when extraction is suspect, so the happy path on the 95%
   // of pages where extraction works is unchanged. The HTTP round-trip
   // only fires when an allowlisted alternate is actually present —
   // typically YouTube/Vimeo/Substack/etc.
-  const looksThin =
-    extracted === null || extracted.length < 200 || extracted.length < 0.01 * body.length;
+  const looksThin = !useExtracted || extracted.length < 200;
   if (looksThin) {
     const alt = await tryFollowAlternate(body, input.url, currentUa);
     if (alt !== null) return truncate(alt, maxChars);
@@ -552,7 +565,15 @@ async function tryFollowAlternate(
   pageUrl: string,
   ua: string,
 ): Promise<string | null> {
-  const pageOrigin = new URL(pageUrl).origin;
+  const pageUrlParsed = new URL(pageUrl);
+  const pageOrigin = pageUrlParsed.origin;
+  // Asymmetry note: the allowlist check below uses `continue` (skip this
+  // entry, try the next), but every other failure mode — bad URL, wrong
+  // origin, network error, 4xx/5xx, unparseable body — uses first-match-
+  // wins (return null and let the caller fall back to thin extraction).
+  // The allowlist isn't an "attempt" — we never made an HTTP request — so
+  // skipping past a non-allowlisted (e.g. RSS) entry to reach the next
+  // candidate doesn't violate the no-multi-attempt latency contract.
   for (const alt of findAlternates(html)) {
     if (!ALLOWED_ALTERNATE_TYPES.has(alt.type)) continue;
     let altUrl: URL;
@@ -561,16 +582,19 @@ async function tryFollowAlternate(
       // `validateUrl` re-applies the SSRF + scheme + blocked-host guard,
       // so an alternate pointing at 169.254.169.254 (AWS IMDS) or
       // 10.0.0.1 still gets rejected here, not just at fetch time.
-      altUrl = validateUrl(new URL(alt.url, pageUrl).toString());
+      altUrl = validateUrl(new URL(alt.url, pageUrlParsed).toString());
     } catch {
       continue;
     }
-    // Same-origin filter — see function-level comment for rationale.
+    // Same-origin filter — see function-level comment for rationale. The
+    // post-redirect re-check happens inside fetchWithRedirects via
+    // requireSameOriginAs; without it, a same-origin alternate that 302s
+    // to an attacker origin would be followed.
     if (altUrl.origin !== pageOrigin) continue;
 
     let altResponse: Response;
     try {
-      altResponse = await fetchWithRedirects(altUrl, ua);
+      altResponse = await fetchWithRedirects(altUrl, ua, pageOrigin);
     } catch {
       // Network failure / SSRF on a redirect / too-many-redirects: first
       // match wins, so we surrender and let the caller use the thin
@@ -598,22 +622,42 @@ async function tryFollowAlternate(
 // — an alternate that claimed `application/json+oembed` and served PDF is
 // either misbehaving or hostile; bail out and let the caller fall back.
 async function formatAlternateBody(response: Response): Promise<string | null> {
+  // Cancel the body on every early return so an unwanted alternate (e.g.
+  // application/pdf served against an oEmbed-typed link) doesn't leak the
+  // socket. Mirrors the 4xx branch in tryFollowAlternate.
+  const cancel = async (): Promise<void> => {
+    try {
+      await response.body?.cancel();
+    } catch {
+      /* already closed */
+    }
+  };
+
   const ct = response.headers.get("content-type") ?? "";
   const kind = classifyMime(ct);
-  if (kind !== "json" && kind !== "text") return null;
+  if (kind !== "json" && kind !== "text") {
+    await cancel();
+    return null;
+  }
 
   // Mirror fetchAsMarkdown's content-length pre-check so an alternate
   // server can't bypass the 5 MB cap by virtue of being a fallback path.
   // readBoundedBody enforces the same cap from the stream regardless.
   const cl = response.headers.get("content-length");
-  if (cl && Number(cl) > MAX_RESPONSE_BYTES) return null;
+  if (cl && Number(cl) > MAX_RESPONSE_BYTES) {
+    await cancel();
+    return null;
+  }
 
   let body: string;
   try {
     body = await decodeBody(response, kind);
   } catch {
     // Oversize stream / decode failure: treat as alternate-not-usable and
-    // let the caller fall back to the thin extraction.
+    // let the caller fall back to the thin extraction. decodeBody may have
+    // already consumed/cancelled the body, but cancel() on a closed body
+    // is a no-op (caught above).
+    await cancel();
     return null;
   }
 

@@ -37,10 +37,12 @@ export interface Alternate {
   title?: string;
 }
 
-// Scope the scan to <head>...</head>. Falls back to "<head>...<body" when
-// </head> is missing (malformed but real — see acceptance criteria), and to
-// "<head>... end-of-string" when neither closer exists. The acceptance test
-// for malformed <head> exercises the fallback.
+// Scope the scan to <head>...</head>. Fallbacks in priority order:
+//   1. </head> closer (well-formed)
+//   2. <body open tag (malformed but real — see acceptance criteria)
+//   3. end of string (no <head> closer at all; the no-<head>-at-all case
+//      is caught earlier by the outer `if (!headMatch)` guard, which
+//      also rejects HTML where the entire <head> open tag is missing)
 //
 // Without this scope a stray <link rel="alternate"> in <body> (some sites
 // inject in-content video embeds with link tags) would be picked up too,
@@ -68,10 +70,12 @@ export function findAlternates(html: string): Alternate[] {
   const head = headMatch[1] ?? "";
 
   // Strip HTML comments first so a commented-out <link> can't leak through.
-  // An unterminated <!-- truncates the scan window to be safe — mirrors
-  // sniffHtmlMetaCharset's defense.
+  // The global replace above removes only well-formed `<!-- ... -->` pairs,
+  // so any `<!--` still in `scope` is by definition unterminated; truncate
+  // the scan window at it to be safe — mirrors sniffHtmlMetaCharset's
+  // defense.
   let scope = head.replace(/<!--[\s\S]*?-->/g, "");
-  const unterm = scope.indexOf("<!--");
+  const unterm = scope.indexOf("<!--"); // unterminated only — see comment above
   if (unterm !== -1) scope = scope.slice(0, unterm);
 
   const out: Alternate[] = [];

@@ -1081,8 +1081,9 @@ describe("Cloudflare retry hack", () => {
 });
 
 describe("looksLikeJsShell (issue #129)", () => {
-  // Helper is marker-presence-only on the first 4 KB; the body-size half of
-  // the AND lives in the caller. These tests pin both halves of that contract.
+  // Helper is marker-presence-only (no prefix-window slice); the body-size
+  // half of the AND lives in the caller. These tests pin both halves of that
+  // contract.
   it.each([
     "JavaScript is not available.",
     "Please enable JavaScript to continue.",
@@ -1170,18 +1171,39 @@ describe("JS-only shell detection in fetchAsMarkdown (issue #129)", () => {
     expect(md).toContain("Lorem ipsum");
   });
 
-  it("throws when marker survives only in raw body (extractor stripped <noscript>)", async () => {
-    // trafilatura/Readability often strip <noscript> entirely, leaving an
-    // extracted-then-html2md output that's near-empty and marker-free. Without
-    // the raw-body fallback the caller would receive a tiny blank string
-    // instead of the actionable JS-only shell error.
+  it("throws when marker survives only in raw body (extractor stripped live-DOM text)", async () => {
+    // trafilatura/Readability can drop near-empty bodies down to a loading
+    // string, leaving an extracted-then-html2md output that's marker-free even
+    // though the upstream HTML's *visible* DOM is a textbook SPA shell.
+    // Without the raw-body fallback the caller would receive a tiny blank
+    // string instead of the actionable JS-only shell error.
+    //
+    // Marker lives in a real DOM node (not <noscript>) on purpose: the body
+    // fallback strips <noscript> before scanning, so a CRA/Next default
+    // template's <noscript>You need to enable JavaScript…</noscript> on an
+    // otherwise-real page must NOT trip the shell error. See companion
+    // negative test below.
     vi.mocked(htmlToMarkdown).mockResolvedValueOnce("Loading\u2026");
     mockFetchOnce({
-      body: "<html><body><noscript>JavaScript is not available.</noscript><div id='app'></div></body></html>",
+      body: "<html><body><div id='app'>JavaScript is not available.</div></body></html>",
     });
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
       /Site requires JS, cannot fetch in shell-only mode \(JS-only shell\)/,
     );
+  });
+
+  it("does NOT throw when marker only appears inside <noscript> (CRA/Next default)", async () => {
+    // Every CRA/Next scaffold ships <noscript>You need to enable JavaScript
+    // to run this app</noscript>. If extraction degenerates (md < 2 KB) on
+    // a legit page, the body fallback must not turn that boilerplate into
+    // an actionable error — only shells whose *visible* DOM is the marker
+    // should trip. Pins the scrub regex in the body-fallback path.
+    vi.mocked(htmlToMarkdown).mockResolvedValueOnce("Welcome.");
+    mockFetchOnce({
+      body: "<html><body><noscript>You need to enable JavaScript to run this app.</noscript><main>Welcome.</main></body></html>",
+    });
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(md).toContain("Welcome");
   });
 
   it("does NOT throw on short markdown without marker (e.g. tiny status page)", async () => {

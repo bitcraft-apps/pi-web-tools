@@ -362,7 +362,7 @@ const JS_SHELL_MARKERS = [
   // newlines/emphasis between phrase fragments, and a tail-window crossing
   // unrelated paragraphs would re-admit false positives the period-stop was
   // meant to exclude.
-  /\bplease enable JavaScript\b[^.\n]{0,40}\bto (continue|use|view|run|access)\b/i,
+  /\bplease enable JavaScript\b[^.\n\r]{0,40}\bto (continue|use|view|run|access)\b/i,
   /\byou need to enable JavaScript to run this app\b/i,
   /\bthis website requires JavaScript\b/i,
 ];
@@ -677,10 +677,17 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // strip <noscript> fragments entirely, leaving an extracted-then-html2md
   // output that's near-empty and marker-free even though the upstream HTML is
   // a textbook SPA shell. Without this, the caller would receive a tiny
-  // blank-ish string instead of the actionable JS-only shell error. The
-  // `md.length < 2 KB` gate still bounds the false-positive risk: a real
-  // article that produces ≥ 2 KB of markdown is never rechecked against body.
-  if (md.length < JS_SHELL_MAX_CHARS && (looksLikeJsShell(md) || looksLikeJsShell(body))) {
+  // blank-ish string instead of the actionable JS-only shell error.
+  //
+  // <noscript> blocks are stripped before the body scan: every CRA/Next
+  // default template ships <noscript>You need to enable JavaScript to run
+  // this app</noscript>, and a page whose extraction merely degenerated
+  // (md < 2 KB but real content exists in the live DOM) would otherwise be
+  // replaced by the actionable error. Stripping <noscript> means only shells
+  // whose *visible* DOM carries the marker trip the fallback — which is the
+  // signature we actually want to catch.
+  const bodyVisible = body.replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, "");
+  if (md.length < JS_SHELL_MAX_CHARS && (looksLikeJsShell(md) || looksLikeJsShell(bodyVisible))) {
     throw new Error("Site requires JS, cannot fetch in shell-only mode (JS-only shell)");
   }
 

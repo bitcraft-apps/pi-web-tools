@@ -285,7 +285,10 @@ describe("content extraction wire-in", () => {
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(extractContent).toHaveBeenCalledWith(
       expect.stringContaining(article),
-      "https://example.com",
+      // Post-redirect (final) URL, normalized by `URL` — `https://example.com`
+      // round-trips to `https://example.com/`. Pin the normalized form so a
+      // future regression that reverts to the pre-redirect input.url is loud.
+      "https://example.com/",
     );
     expect(htmlToMarkdown).toHaveBeenCalledWith(article);
   });
@@ -347,6 +350,316 @@ describe("content extraction wire-in", () => {
     mockFetchOnce({ body: "plain text", headers: { "content-type": "text/plain" } });
     await fetchAsMarkdown({ url: "https://example.com/x.txt" });
     expect(extractContent).not.toHaveBeenCalled();
+  });
+});
+
+// Build a chrome-only HTML shell where the extractor's output (mocked via
+// tests) is suspect: passes the > 10 KB extractor gate but is < 1% of body
+// size, triggering the looksThin branch in fetchAsMarkdown. Module-scope so
+// it's not recreated on every call inside the describe (oxlint rule
+// no-loop-func / hoist-stable-helpers).
+function shellHtml(alternateTag: string): string {
+  return "<html><head>" + alternateTag + "</head><body>" + "x".repeat(20_000) + "</body></html>";
+}
+
+// Issue #128: when extraction is thin, follow a same-origin <link
+// rel="alternate"> in <head> with an allowlisted media type. Concrete
+// motivating case is YouTube's oEmbed endpoint surfacing title/author/etc.
+// when the watch-page HTML is a JS shell or login interstitial.
+describe("thin-extraction <link rel=alternate> fallback (issue #128)", () => {
+  const OEMBED_JSON_HREF = "https://example.com/oembed.json";
+
+  // Sequence-aware fetch mock: pop a Response per call. Distinct from
+  // mockFetchOnce because the alternate path issues two HTTP fetches.
+  // No per-call cleanup needed: the file-level afterEach
+  // (`vi.unstubAllGlobals()`) restores `fetch` between tests, so a leaked
+  // sequence here can't reach the next test.
+  function mockFetchSequence(
+    responses: Array<{
+      status?: number;
+      headers?: Record<string, string>;
+      body?: string | Uint8Array;
+    }>,
+  ): ReturnType<typeof vi.fn> {
+    const fn = vi.fn();
+    for (const r of responses) {
+      const headers = new Headers(r.headers ?? { "content-type": "text/html; charset=utf-8" });
+      const body = r.body ?? "";
+      const responseBody: BodyInit = typeof body === "string" ? body : new Uint8Array(body);
+      fn.mockResolvedValueOnce(new Response(responseBody, { status: r.status ?? 200, headers }));
+    }
+    vi.stubGlobal("fetch", fn);
+    return fn;
+  }
+
+  it("follows an oEmbed JSON alternate when extraction is thin", async () => {
+    // Page extraction returns ~tiny output for a 20 KB body: looksThin fires.
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}" title="Rick">`,
+    );
+    const fetchMock = mockFetchSequence([
+      { body: html },
+      {
+        body: '{"title":"Rick Astley","author_name":"Rick Astley"}',
+        headers: { "content-type": "application/json" },
+      },
+    ]);
+    const out = await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Second fetch hit the oEmbed URL exactly. fetchWithRedirects passes a
+    // URL object to fetch, not a string — assert against URL directly so a
+    // future shape change (e.g. Request) is a loud test failure rather than
+    // a silent toString match.
+    const altCall = fetchMock.mock.calls[1]![0];
+    expect(altCall).toBeInstanceOf(URL);
+    if (!(altCall instanceof URL)) throw new Error("unreachable");
+    expect(altCall.href).toBe(OEMBED_JSON_HREF);
+    // Output is the formatted oEmbed JSON, not the thin-extraction markdown.
+    expect(out).toContain("```json");
+    expect(out).toContain('"title": "Rick Astley"');
+    // htmlToMarkdown was bypassed entirely on the success path.
+    expect(htmlToMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("falls back to thin extraction on a cross-origin alternate (open-redirector defense)", async () => {
+    // A page can advertise an alternate at any URL; following cross-origin
+    // alternates would turn webfetch into an open redirector for the page
+    // author. This is the same-origin filter under test.
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="https://attacker.example/o.json">`,
+    );
+    const fetchMock = mockFetchSequence([{ body: html }]);
+    await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    // Only the original page was fetched; the alternate URL was rejected.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // We fell back to converting the full HTML.
+    expect(htmlToMarkdown).toHaveBeenCalled();
+  });
+
+  it("is unchanged when no alternate link is present", async () => {
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml("");
+    const fetchMock = mockFetchSequence([{ body: html }]);
+    await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(htmlToMarkdown).toHaveBeenCalledWith(html);
+  });
+
+  it("never follows an alternate when extraction is healthy (no extra HTTP)", async () => {
+    // Happy path: extracted is >= 1% of body. looksThin must be false so
+    // the alternate is never even considered — this is the cost-control
+    // contract for the 95% of pages where extraction works.
+    const fullHtml = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">`,
+    );
+    const extracted = "<article>" + "y".repeat(1_500) + "</article>"; // > 1% of 20 KB
+    vi.mocked(extractContent).mockResolvedValueOnce(extracted);
+    const fetchMock = mockFetchSequence([{ body: fullHtml }]);
+    await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(htmlToMarkdown).toHaveBeenCalledWith(extracted);
+  });
+
+  it("falls back to thin extraction when the alternate returns HTTP 4xx", async () => {
+    // First-match-wins: a failed oEmbed fetch does NOT trigger trying the
+    // next alternate. We surrender to the thin-extraction markdown.
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">`,
+    );
+    const fetchMock = mockFetchSequence([
+      { body: html },
+      { status: 404, body: "not found", headers: { "content-type": "text/plain" } },
+    ]);
+    await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(htmlToMarkdown).toHaveBeenCalledWith(html);
+  });
+
+  it("skips disallowed alternate types (RSS) and follows the next allowed one", async () => {
+    // findAlternates returns RSS entries too; the call site filters via
+    // the allowlist. Three entries pin first-match-wins ordering end-to-
+    // end: RSS (denied) → oEmbed JSON (allowed, fetched) → markdown
+    // (allowed, must NOT be fetched). The mock sequence has only two
+    // entries, so a regression that fetches the third would throw.
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/rss+xml" href="https://example.com/feed.rss">` +
+        `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">` +
+        `<link rel="alternate" type="text/markdown" href="https://example.com/post.md">`,
+    );
+    const fetchMock = mockFetchSequence([
+      { body: html },
+      { body: '{"ok":true}', headers: { "content-type": "application/json" } },
+    ]);
+    const out = await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const altCall = fetchMock.mock.calls[1]![0];
+    expect(altCall).toBeInstanceOf(URL);
+    if (!(altCall instanceof URL)) throw new Error("unreachable");
+    expect(altCall.href).toBe(OEMBED_JSON_HREF);
+    expect(out).toContain('"ok": true');
+  });
+
+  it("resolves a relative alternate href against the page URL", async () => {
+    // YouTube ships absolute hrefs, but other oEmbed providers (Substack,
+    // self-hosted WordPress) often use relative paths. Resolution against
+    // the page URL must keep the result same-origin.
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="/api/oembed.json">`,
+    );
+    const fetchMock = mockFetchSequence([
+      { body: html },
+      { body: '{"x":1}', headers: { "content-type": "application/json" } },
+    ]);
+    await fetchAsMarkdown({ url: "https://example.com/post/hello" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const altCall = fetchMock.mock.calls[1]![0];
+    expect(altCall).toBeInstanceOf(URL);
+    if (!(altCall instanceof URL)) throw new Error("unreachable");
+    expect(altCall.href).toBe("https://example.com/api/oembed.json");
+  });
+
+  it("falls back when a same-origin alternate redirects cross-origin", async () => {
+    // The same-origin filter is enforced on the advertised href, but
+    // fetchWithRedirects follows redirects — so a same-origin alternate
+    // that 302s to attacker.example would be followed without a post-
+    // redirect re-check. Pin that re-check: the cross-origin Location
+    // throws inside fetchWithRedirects and we surrender to thin extraction.
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">`,
+    );
+    const fetchMock = mockFetchSequence([
+      { body: html },
+      { status: 302, headers: { location: "https://attacker.example/o.json" }, body: "" },
+    ]);
+    await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    // The redirect target is never fetched: only the original page and the
+    // (rejected) same-origin alternate. We then fall back to thin extraction.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(htmlToMarkdown).toHaveBeenCalledWith(html);
+  });
+
+  it("resolves a relative alternate against the post-redirect URL (not input.url)", async () => {
+    // Regression for the redirect-origin gap flagged in PR #134 review:
+    // pageOrigin used to be derived from input.url, so a relative alternate
+    // href on a redirected page would resolve against the wrong origin and
+    // an absolute alternate on the post-redirect host would be rejected as
+    // cross-origin. fetchWithRedirects now hands back finalUrl and that's
+    // what the alternate path uses.
+    //
+    // Sequence: GET https://example.com/post → 302 to https://www.example.com/post
+    //           GET https://www.example.com/post → thin shell with relative
+    //                                                alternate href="/api/oembed.json"
+    //           GET https://www.example.com/api/oembed.json → oEmbed JSON
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="/api/oembed.json">`,
+    );
+    const fetchMock = mockFetchSequence([
+      { status: 302, headers: { location: "https://www.example.com/post" }, body: "" },
+      { body: html },
+      { body: '{"ok":true}', headers: { "content-type": "application/json" } },
+    ]);
+    const out = await fetchAsMarkdown({ url: "https://example.com/post" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const altCall = fetchMock.mock.calls[2]![0];
+    expect(altCall).toBeInstanceOf(URL);
+    if (!(altCall instanceof URL)) throw new Error("unreachable");
+    // Resolved against the post-redirect host, not example.com.
+    expect(altCall.href).toBe("https://www.example.com/api/oembed.json");
+    expect(out).toContain('"ok": true');
+  });
+
+  it("skips a cross-origin alternate and follows the next same-origin allowed entry", async () => {
+    // Pre-HTTP filters (cross-origin in particular) `continue` to the next
+    // entry instead of bailing out — the asymmetry note in tryFollowAlternate
+    // documents this. None of the other 7 tests exercise the
+    // `[cross-origin allowed-type, same-origin allowed-type]` ordering, so
+    // this pins it: the cross-origin entry is skipped without a request,
+    // and the same-origin entry is fetched.
+    vi.mocked(extractContent).mockResolvedValueOnce("<p>tiny</p>");
+    const html = shellHtml(
+      `<link rel="alternate" type="application/json+oembed" href="https://other.example/o.json">` +
+        `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">`,
+    );
+    const fetchMock = mockFetchSequence([
+      { body: html },
+      { body: '{"ok":true}', headers: { "content-type": "application/json" } },
+    ]);
+    const out = await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    // Two calls total: page + same-origin alternate. The cross-origin
+    // entry never hits the network (would be call #2 if we'd bailed instead
+    // of continuing).
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const altCall = fetchMock.mock.calls[1]![0];
+    expect(altCall).toBeInstanceOf(URL);
+    if (!(altCall instanceof URL)) throw new Error("unreachable");
+    expect(altCall.href).toBe(OEMBED_JSON_HREF);
+    expect(out).toContain('"ok": true');
+  });
+
+  it("keeps a short-but-passing extraction instead of following an alternate", async () => {
+    // Regression for the looksThin gate (PR #134 review): a 150-char
+    // extraction on a 10 KB body is 1.5% — above the 1% floor, so
+    // useExtracted is true and the content is genuinely correct (just
+    // short). The earlier `extracted.length < 200` OR-branch would have
+    // discarded it and replaced it with an oEmbed stub. The `&&` form
+    // pins the protective behavior: zero alternate fetches, and the
+    // 150-char extraction is what's converted to markdown.
+    const shortBody =
+      "<html><head>" +
+      `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">` +
+      "</head><body>" +
+      "x".repeat(10_000) +
+      "</body></html>";
+    const extracted = "<article>" + "y".repeat(140) + "</article>"; // 158 chars, ~1.5% of 10 KB
+    vi.mocked(extractContent).mockResolvedValueOnce(extracted);
+    const fetchMock = mockFetchSequence([{ body: shortBody }]);
+    await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    // No alternate fetch — just the page itself.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(htmlToMarkdown).toHaveBeenCalledWith(extracted);
+  });
+
+  it("pins the && semantics at the exact boundary (199 chars, 1% gate just passes)", async () => {
+    // Boundary regression for the `&& extracted.length < 200` half of the
+    // looksThin gate (PR #134 review): a future refactor to `||` would
+    // discard a 199-char extraction even when the 1% gate already passed,
+    // surfacing an oEmbed stub in place of legitimate-but-short content.
+    //
+    // Construction: 199-char extraction on a body sized so that
+    //   199 >= 0.01 * body.length        (1% gate passes → useExtracted=true)
+    //   199 < 200                         (length floor would trigger alone)
+    // Both gates are wired with `&&`, so looksThin is false and zero alt
+    // fetches happen. With `||`, length<200 would dominate — alt would fire.
+    const extracted = "<article>" + "y".repeat(199 - "<article></article>".length) + "</article>";
+    expect(extracted).toHaveLength(199);
+    // Pad body so total length sits at exactly 19_800 chars: 199/19_800 ≈
+    // 1.005% — the 1% gate passes by ~1 char of headroom. Tightest
+    // boundary that still proves the AND semantics.
+    const targetBodyLen = 19_800;
+    const head =
+      "<html><head>" +
+      `<link rel="alternate" type="application/json+oembed" href="${OEMBED_JSON_HREF}">` +
+      "</head><body>";
+    const tail = "</body></html>";
+    const shortBody = head + "x".repeat(targetBodyLen - head.length - tail.length) + tail;
+    expect(shortBody).toHaveLength(targetBodyLen);
+    expect(extracted.length).toBeGreaterThanOrEqual(0.01 * shortBody.length); // 1% gate passes
+    expect(extracted.length).toBeLessThan(200); // length floor would trigger alone
+    vi.mocked(extractContent).mockResolvedValueOnce(extracted);
+    const fetchMock = mockFetchSequence([{ body: shortBody }]);
+    await fetchAsMarkdown({ url: "https://example.com/watch?v=x" });
+    // No alternate fetch: useExtracted is true (1% gate), so looksThin is
+    // false regardless of the < 200 floor. An accidental `||` would also
+    // pass length check (199 < 200) and trigger an alternate fetch.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(htmlToMarkdown).toHaveBeenCalledWith(extracted);
   });
 });
 

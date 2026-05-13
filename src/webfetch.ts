@@ -3,6 +3,7 @@ import { validateUrl } from "./lib/url-guard.js";
 import { getSsrfAgent } from "./lib/ssrf-agent.js";
 import { htmlToMarkdown } from "./lib/html2md.js";
 import { extractContent } from "./lib/extract.js";
+import { findAlternates, ALLOWED_ALTERNATE_TYPES } from "./lib/alternates.js";
 import { pdfToText } from "./lib/pdf.js";
 import {
   ACCEPT_HEADER,
@@ -219,6 +220,11 @@ function isRedirect(status: number): boolean {
 }
 
 // Follow up to MAX_REDIRECTS hops, re-running validateUrl on each Location.
+// `requireSameOriginAs`, when set, additionally enforces that every post-redirect
+// URL stays within the given origin — used by the alternate-link fallback so
+// a same-origin alternate can't 302 to an attacker origin (validateUrl alone
+// blocks private IPs, not arbitrary public hosts).
+//
 // Without this, `redirect: "follow"` would silently bypass the SSRF guard:
 // a public host can 302 to http://10.0.0.1, http://169.254.169.254 (AWS IMDS),
 // http://localhost, etc., and the URL guard only saw the original input.
@@ -231,13 +237,31 @@ function isRedirect(status: number): boolean {
 // preserve method+body) collapse to "always GET" — we just re-issue at the
 // new URL with the same UA. If this ever grows POST support, add downgrade
 // handling here.
-async function fetchWithRedirects(url: URL, userAgent: string): Promise<Response> {
+async function fetchWithRedirects(
+  url: URL,
+  userAgent: string,
+  requireSameOriginAs?: string,
+): Promise<{ response: Response; finalUrl: URL }> {
   let current = url;
   for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
     const response = await doFetch(current, userAgent);
-    if (!isRedirect(response.status)) return response;
+    // Both branches below return `current` as `finalUrl`: it's the URL we
+    // issued this hop against, and therefore the URL of the response we're
+    // handing back to the caller ("where the bytes came from"). Callers
+    // treat it as the page URL for same-origin checks and relative-href
+    // resolution. We can't rely on Response.url here: with
+    // `redirect: "manual"`, undici sets it to the URL of the underlying
+    // fetch call, which is correct hop-by-hop but only happens to equal
+    // the final URL because we re-issue manually. Returning `current`
+    // makes the contract explicit and survives any future change to that
+    // undici detail.
+    if (!isRedirect(response.status)) return { response, finalUrl: current };
     const location = response.headers.get("location");
-    if (!location) return response; // 3xx with no Location — let caller handle.
+    // 3xx with no Location: response is malformed but real (some misconfigured
+    // origins do this on 304-without-cache-validators). Hand it back with the
+    // URL we issued against as finalUrl — same contract as the non-redirect
+    // branch above.
+    if (!location) return { response, finalUrl: current };
     // Discard the redirect body (without draining) to free the connection.
     try {
       await response.body?.cancel();
@@ -255,6 +279,11 @@ async function fetchWithRedirects(url: URL, userAgent: string): Promise<Response
     // Cheap today (pure parsing + regex, no DNS); revisit if validateUrl ever
     // grows expensive checks.
     current = validateUrl(next.toString());
+    if (requireSameOriginAs !== undefined && current.origin !== requireSameOriginAs) {
+      throw new Error(
+        `Cross-origin redirect from ${requireSameOriginAs} to ${current.origin} blocked`,
+      );
+    }
   }
   throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
 }
@@ -382,7 +411,19 @@ async function isCloudflareChallenge(response: Response): Promise<boolean> {
 // 302s on the first attempt and 429s with a Retry-After on the second.
 // Mild cost: an extra round-trip on the (rare) chained-redirect-then-rate-
 // limit path. Worth it.
-async function maybeRetryAfter(response: Response, url: URL, ua: string): Promise<Response | null> {
+//
+// Returns `{response, finalUrl}` (not just response) because the retry walks
+// redirects from the original URL, and the post-retry chain may legitimately
+// land on a different origin than the pre-retry one (e.g. server flips from
+// a localized interstitial to the canonical host on the second attempt). The
+// caller MUST replace its existing `finalUrl` with this one — otherwise the
+// extractor and alternate-link path would do same-origin and relative-href
+// math against the stale pre-retry origin.
+async function maybeRetryAfter(
+  response: Response,
+  url: URL,
+  ua: string,
+): Promise<{ response: Response; finalUrl: URL } | null> {
   if (response.status !== 429 && response.status !== 503) return null;
   const waitMs = parseRetryAfter(response.headers.get("retry-after"));
   if (waitMs === null) return null;
@@ -406,7 +447,11 @@ async function maybeRetryAfter(response: Response, url: URL, ua: string): Promis
     /* locked or already closed — either way, nothing actionable here */
   }
   await new Promise((r) => setTimeout(r, waitMs));
-  return fetchWithRedirects(url, ua);
+  // Hand back finalUrl too — see function comment for why the caller must
+  // refresh its own `finalUrl` from this. The retry intentionally re-walks
+  // redirects from the original URL, so the post-retry chain can land on a
+  // different final URL than the pre-retry one.
+  return await fetchWithRedirects(url, ua);
 }
 
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
@@ -418,26 +463,37 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // is blocked, regardless of UA. The retry only fires when the first call
   // returned a Response that looks like a CF challenge.
   let currentUa = BROWSER_UA;
-  let response = await fetchWithRedirects(url, currentUa);
+  let { response, finalUrl } = await fetchWithRedirects(url, currentUa);
 
   if (await isCloudflareChallenge(response)) {
     currentUa = OPENCODE_UA;
-    response = await fetchWithRedirects(url, currentUa);
+    ({ response, finalUrl } = await fetchWithRedirects(url, currentUa));
     if (await isCloudflareChallenge(response)) {
       throw new Error("Site requires JS, cannot fetch in shell-only mode (Cloudflare challenge)");
     }
   }
 
-  response = (await maybeRetryAfter(response, url, currentUa)) ?? response;
+  // Refresh finalUrl from the retry: a post-retry redirect chain may land
+  // on a different origin than the pre-retry one (see maybeRetryAfter). If
+  // we kept the stale finalUrl, the extractor below and tryFollowAlternate
+  // would resolve relative hrefs and do same-origin checks against the
+  // wrong page URL.
+  const retried = await maybeRetryAfter(response, url, currentUa);
+  if (retried !== null) ({ response, finalUrl } = retried);
 
   if (response.status >= 400) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }
 
   const cl = response.headers.get("content-length");
-  if (cl && Number(cl) > MAX_RESPONSE_BYTES) {
+  // `Number.isFinite` guard: `Number("abc")` is NaN and any NaN comparison
+  // is false, so a garbage Content-Length would slip past this pre-check.
+  // readBoundedBody re-enforces the cap from the stream regardless, but
+  // the pre-check exists precisely to short-circuit before reading.
+  const clNum = cl ? Number(cl) : NaN;
+  if (Number.isFinite(clNum) && clNum > MAX_RESPONSE_BYTES) {
     throw new Error(
-      `Response too large (${(Number(cl) / 1024 / 1024).toFixed(1)} MB, max ${MAX_RESPONSE_MB})`,
+      `Response too large (${(clNum / 1024 / 1024).toFixed(1)} MB, max ${MAX_RESPONSE_MB})`,
     );
   }
 
@@ -502,10 +558,196 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // correct; the 10 KB threshold is fuzzy for non-ASCII pages but doesn't
   // need to be tight. An extractor that returns literally "" passes the
   // null-check and then 0 < 100, so it correctly falls back.
-  const extracted = body.length < 10_000 ? null : await extractContent(body, input.url);
+  //
+  // Use `finalUrl` (post-redirect), not `input.url`: relative hrefs and
+  // base-URL resolution inside the extractor must reflect where the bytes
+  // actually came from. example.com → www.example.com would otherwise
+  // resolve `/foo` against the wrong host.
+  const extracted = body.length < 10_000 ? null : await extractContent(body, finalUrl.toString());
   const useExtracted = extracted !== null && extracted.length >= 0.01 * body.length;
+
+  // Thin-extraction fallback (issue #128). Fires only when the extractor
+  // *actually ran and returned thin output* — `extracted !== null` rules
+  // out both "body too small to bother" and "no extractor on $PATH /
+  // extractor failed" (extractContent returns null in both). Without that
+  // gate, every fetch on an extractor-less host would pay the alt-scan
+  // and a potential extra HTTP round-trip — contradicting the cost-control
+  // contract documented in the README.
+  //
+  // "Thin" = the same condition that already disqualifies the extractor
+  // output for the main pipeline (`!useExtracted`, i.e. < 1% of body),
+  // plus a hard 200-char floor so a 10-20 KB page with a borderline-1%
+  // extraction still qualifies. Above 20 KB, 1% already implies > 200.
+  //
+  // The HEAD-scan itself (regex tokenization) is cheap; the HTTP round-
+  // trip only fires when an allowlisted alternate is actually present —
+  // typically YouTube/Vimeo/Substack/etc.
+  // `&&` (not `||`) on the 200-char floor: a genuinely short page (e.g.
+  // 10 KB body, 150-char correct extraction at 1.5%) passes the 1% check
+  // (`useExtracted` is true) and must keep its real content. Only when
+  // extraction was already rejected (`!useExtracted`, i.e. < 1% of body)
+  // do we apply the additional floor — for very large bodies a passing 1%
+  // implies > 200 already, so the floor is a no-op there; it only matters
+  // in the 10–20 KB band where 1% can be in the tens of chars.
+  const looksThin = extracted !== null && !useExtracted && extracted.length < 200;
+  if (looksThin) {
+    // Same finalUrl rationale as above: alternate hrefs are resolved and
+    // same-origin-checked against the page we actually fetched, not the
+    // pre-redirect input.
+    const alt = await tryFollowAlternate(body, finalUrl, currentUa);
+    if (alt !== null) return truncate(alt, maxChars);
+  }
+
   const md = await htmlToMarkdown(useExtracted ? extracted : body);
   return truncate(md, maxChars);
+}
+
+// Try to follow the first allowlisted, same-origin <link rel="alternate">
+// in `html` and return its formatted body, or null on any failure.
+//
+// Same-origin only: a page can advertise an alternate pointing anywhere
+// (`<link rel="alternate" href="https://attacker.example/...">`); following
+// cross-origin alternates would turn webfetch into an open redirector for
+// the page author. The SSRF guard alone isn't sufficient — public-IP
+// attackers aren't blocked by it. Same-origin is the natural trust boundary
+// for "alternate representation of *this* page."
+//
+// First match wins: if the first eligible alternate fails (HTTP error,
+// network failure, oversized body, unknown content type), we don't try the
+// next one — caller falls back to the thin extraction we already had.
+// Multi-attempt logic is latency we don't want on the unhappy path.
+//
+// Pre-HTTP filters (allowlist miss, bad URL, cross-origin) `continue` to
+// the next entry instead — see the asymmetry note inside the function.
+//
+// All HTTP goes through `fetchWithRedirects` so SSRF guard, redirect cap,
+// and Retry-After all apply uniformly with the primary fetch.
+async function tryFollowAlternate(html: string, pageUrl: URL, ua: string): Promise<string | null> {
+  // pageUrl arrives as a URL object (not a string) so we don't re-parse
+  // here just to call `.origin` and pass to `new URL(href, base)`. The
+  // URL constructor accepts a URL as its base argument directly.
+  const pageOrigin = pageUrl.origin;
+  // Asymmetry note: pre-HTTP filters — allowlist miss, malformed/SSRF-
+  // rejected URL, cross-origin href — use `continue` (skip this entry, try
+  // the next). Post-HTTP failures — network error, 4xx/5xx, unparseable
+  // body — use first-match-wins (`return null` and let the caller fall
+  // back to thin extraction). Pre-HTTP cases aren't "attempts" — we never
+  // issued a request — so skipping them to reach the next candidate
+  // doesn't violate the no-multi-attempt latency contract.
+  for (const alt of findAlternates(html)) {
+    if (!ALLOWED_ALTERNATE_TYPES.has(alt.type)) continue;
+    let altUrl: URL;
+    try {
+      // `new URL(href, base)` resolves relative refs against the page URL;
+      // `validateUrl` re-applies the SSRF + scheme + blocked-host guard,
+      // so an alternate pointing at 169.254.169.254 (AWS IMDS) or
+      // 10.0.0.1 still gets rejected here, not just at fetch time.
+      altUrl = validateUrl(new URL(alt.url, pageUrl).toString());
+    } catch {
+      continue;
+    }
+    // Same-origin filter — see function-level comment for rationale. The
+    // post-redirect re-check happens inside fetchWithRedirects via
+    // requireSameOriginAs; without it, a same-origin alternate that 302s
+    // to an attacker origin would be followed.
+    if (altUrl.origin !== pageOrigin) continue;
+
+    let altResponse: Response;
+    try {
+      // Discard finalUrl on the alternate path: alternates are leaf
+      // fetches — we format the body and return, no further URL math
+      // depends on where the alternate ultimately landed.
+      ({ response: altResponse } = await fetchWithRedirects(altUrl, ua, pageOrigin));
+    } catch {
+      // Network failure / SSRF on a redirect / too-many-redirects: first
+      // match wins, so we surrender and let the caller use the thin
+      // extraction. Don't try the next alternate.
+      return null;
+    }
+    if (altResponse.status >= 400) {
+      try {
+        await altResponse.body?.cancel();
+      } catch {
+        /* already closed */
+      }
+      return null;
+    }
+    return await formatAlternateBody(altResponse);
+  }
+  return null;
+}
+
+// Decode + format an alternate response body. Mirrors the JSON/text branches
+// of `fetchAsMarkdown` (no truncation — caller applies max_chars), but skips
+// the HTML pipeline: none of the allowlisted alternate types are HTML, and
+// pulling extractor + pandoc into the alternate path would mean recursive
+// fallbacks. PDF and binary types are also rejected here for the same reason
+// — an alternate that claimed `application/json+oembed` and served PDF is
+// either misbehaving or hostile; bail out and let the caller fall back.
+async function formatAlternateBody(response: Response): Promise<string | null> {
+  // Cancel the body on every early return so an unwanted alternate (e.g.
+  // application/pdf served against an oEmbed-typed link) doesn't leak the
+  // socket. Mirrors the 4xx branch in tryFollowAlternate.
+  const cancel = async (): Promise<void> => {
+    try {
+      await response.body?.cancel();
+    } catch {
+      /* already closed */
+    }
+  };
+
+  const ct = response.headers.get("content-type") ?? "";
+  const kind = classifyMime(ct);
+  if (kind !== "json" && kind !== "text") {
+    await cancel();
+    return null;
+  }
+
+  // Mirror fetchAsMarkdown's content-length pre-check so an alternate
+  // server can't bypass the 5 MB cap by virtue of being a fallback path.
+  // readBoundedBody enforces the same cap from the stream regardless.
+  // `Number.isFinite` guard: see the equivalent comment in fetchAsMarkdown.
+  const cl = response.headers.get("content-length");
+  const clNum = cl ? Number(cl) : NaN;
+  if (Number.isFinite(clNum) && clNum > MAX_RESPONSE_BYTES) {
+    // Surface the rejection: an oversize alternate is a deliberate skip,
+    // not a bug, but a debugging operator who sees thin extraction returned
+    // for a page that *does* advertise an alternate has no way to tell why
+    // without this line. Mirrors the over-cap Retry-After warn above.
+    console.warn(
+      `webfetch: ignoring oversize alternate (${(clNum / 1024 / 1024).toFixed(1)} MB, max ${MAX_RESPONSE_MB}); falling back to thin extraction`,
+    );
+    await cancel();
+    return null;
+  }
+
+  let body: string;
+  try {
+    body = await decodeBody(response, kind);
+  } catch {
+    // Oversize stream / decode failure: treat as alternate-not-usable and
+    // let the caller fall back to the thin extraction. decodeBody may have
+    // already consumed/cancelled the body, but cancel() on a closed body
+    // is a no-op (caught above).
+    await cancel();
+    return null;
+  }
+
+  if (kind === "json") {
+    try {
+      const pretty = JSON.stringify(JSON.parse(body), null, 2);
+      return "```json\n" + pretty + "\n```";
+    } catch {
+      // Server lied about content-type or returned malformed JSON. Returning
+      // the raw body is still strictly better than the thin extraction we'd
+      // otherwise return — oEmbed XML, for instance, will land here.
+      return body;
+    }
+  }
+  // text/markdown is already markdown — no fence wrapper, unlike the JSON
+  // branch above. Caller can't distinguish this from a text/* fallthrough
+  // by output shape, but that's fine: both are intentionally returned raw.
+  return body;
 }
 
 const webfetchSchema = Type.Object({

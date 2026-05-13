@@ -14,8 +14,10 @@ export const OPENCODE_UA = "opencode";
 // HTML stays at q=0.9 — a small q-gap is the standard way to express
 // "prefer markdown but happily take HTML" without letting intermediaries
 // shuffle order, and it stays high enough that no compliant server downgrades
-// to */* when both are available. application/xhtml+xml and application/xml
-// remain because a handful of XHTML-strict sites still serve only those.
+// to */* when both are available. application/xhtml+xml is dropped to q=0.9
+// alongside HTML (down from an implicit q=1.0); XHTML-strict sites serve only
+// xhtml so the tie with HTML doesn't matter in practice. Everything else is
+// demoted one step (xml 0.9→0.8, */* 0.8→0.7) to keep markdown's lead intact.
 // Servers that ignore the preference (the majority today) return HTML
 // byte-identical to before.
 export const ACCEPT_HEADER =

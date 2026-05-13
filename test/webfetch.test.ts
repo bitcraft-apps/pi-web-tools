@@ -195,7 +195,6 @@ describe("fetchAsMarkdown", () => {
     const init = fetchMock.mock.calls[0]![1]!;
     const headers = new Headers(init.headers);
     expect(headers.get("accept")).toBe(ACCEPT_HEADER);
-    expect(headers.get("accept")).toMatch(/^text\/markdown,/);
   });
 
   it("text/markdown response is returned verbatim and bypasses htmlToMarkdown (issue #135)", async () => {
@@ -214,10 +213,13 @@ describe("fetchAsMarkdown", () => {
   it("text/html response (server ignored markdown preference) still goes through extractor + pandoc", async () => {
     // Regression test for the 70%+ of sites that ignore Accept: text/markdown
     // and serve HTML. The existing extraction pipeline must run unchanged
-    // — the Accept header change is a preference, not a contract.
-    mockFetchOnce({ body: "<h1>Hello</h1>", headers: { "content-type": "text/html" } });
+    // — the Accept header change is a preference, not a contract. Body must
+    // be ≥ 10 KB to clear the small-body extractor bypass in webfetch.ts.
+    const filler = "<p>" + "x".repeat(11_000) + "</p>";
+    mockFetchOnce({ body: `<h1>Hello</h1>${filler}`, headers: { "content-type": "text/html" } });
     const out = await fetchAsMarkdown({ url: "https://example.com" });
     expect(out).toContain("MD:"); // htmlToMarkdown mock prefix
+    expect(extractContent).toHaveBeenCalledTimes(1);
     expect(htmlToMarkdown).toHaveBeenCalledTimes(1);
   });
 

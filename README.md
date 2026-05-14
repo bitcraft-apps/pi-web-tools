@@ -95,6 +95,7 @@ bun run format              # apply oxfmt to src/, test/, index.ts, vitest.confi
 bun run format:check        # CI runs this before lint; fails if anything is unformatted
 bun run test                # unit tests, no network
 bun run test:network        # integration tests (requires net)
+bash scripts/metrics.sh     # passive health signals (npm + GitHub); on-demand, no state
 ```
 
 We use **bun** as the dev package manager. The committed lockfile is `bun.lock`; `package-lock.json` is gitignored.

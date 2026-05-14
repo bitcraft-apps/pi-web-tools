@@ -142,7 +142,7 @@ describe("fetchAsMarkdown", () => {
     vi.mocked(pdfToText).mockResolvedValueOnce("x".repeat(1000));
     mockFetchOnce({ body: "%PDF", headers: { "content-type": "application/pdf" } });
     const out = await fetchAsMarkdown({ url: "https://example.com/x.pdf", max_chars: 50 });
-    expect(out).toMatch(/TRUNCATED/);
+    expect(out).toMatch(/\[TRUNCATED — returned chars 0\.\.50 of 1000 total\. Re-call with offset=50/);
     expect(out.length).toBeLessThanOrEqual(50 + 200);
   });
 
@@ -229,12 +229,12 @@ describe("fetchAsMarkdown", () => {
     expect(htmlToMarkdown).toHaveBeenCalledTimes(1);
   });
 
-  it("truncates output to max_chars with footer", async () => {
+  it("truncates output to max_chars with footer naming the next offset (issue #132)", async () => {
     const longHtml = "<p>" + "x".repeat(100) + "</p>";
     mockFetchOnce({ body: longHtml });
     const md = await fetchAsMarkdown({ url: "https://example.com", max_chars: 5 });
     expect(md.length).toBeLessThanOrEqual(5 + 200); // body + footer
-    expect(md).toMatch(/TRUNCATED/);
+    expect(md).toMatch(/\[TRUNCATED — returned chars 0\.\.5 of \d+ total\. Re-call with offset=5/);
   });
 
   it("rejects response > 5MB via content-length", async () => {

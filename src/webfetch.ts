@@ -21,6 +21,14 @@ import { ensureText, type FormatterTheme } from "./lib/render.js";
 export interface FetchInput {
   url: string;
   max_chars?: number;
+  /**
+   * Character offset into the extracted markdown. Default 0. Used to
+   * page through documents whose extracted size exceeds
+   * MAX_CHARS_HARD_CAP. The next-offset value is reported in the
+   * truncation footer; callers thread it back here on the next call.
+   * See issue #132.
+   */
+  offset?: number;
 }
 
 const HTML_MIMES = ["text/html", "application/xhtml+xml"];
@@ -528,6 +536,21 @@ async function maybeRetryAfter(
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   const url = validateUrl(input.url);
   const maxChars = Math.min(Math.max(1, input.max_chars ?? MAX_CHARS_DEFAULT), MAX_CHARS_HARD_CAP);
+  // Defensive cap (issue #132): the extracted markdown can never exceed
+  // MAX_RESPONSE_BYTES (5 MB → at most 5,242,880 JS string units, since
+  // one wire byte yields ≤1 UTF-16 unit after decode + extraction). Any
+  // offset beyond that is structurally past-end no matter what URL is
+  // fetched — reject up front so a pathological offset=2^53 can't
+  // allocate or motivate an unbounded slice.
+  const offset = input.offset ?? 0;
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error(`Invalid offset: ${offset} (must be a non-negative integer)`);
+  }
+  if (offset > MAX_RESPONSE_BYTES) {
+    throw new Error(
+      `offset ${offset} exceeds maximum (${MAX_RESPONSE_BYTES}); the extracted markdown can never be longer than the network cap`,
+    );
+  }
 
   // If the first attempt throws (e.g. SSRF guard tripped on a redirect),
   // we deliberately do NOT fall through to the CF UA-swap retry — blocked
@@ -597,7 +620,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
       // so hardcode it here rather than re-parsing contentType.
       throw new Error(`Cannot fetch application/pdf. Use a tool that supports binary content.`);
     }
-    return truncate(text, maxChars);
+    return paginate(text, offset, maxChars);
   }
 
   const body = await decodeBody(response, kind);
@@ -605,14 +628,14 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   if (kind === "json") {
     try {
       const pretty = JSON.stringify(JSON.parse(body), null, 2);
-      return truncate("```json\n" + pretty + "\n```", maxChars);
+      return paginate("```json\n" + pretty + "\n```", offset, maxChars);
     } catch {
-      return truncate(body, maxChars);
+      return paginate(body, offset, maxChars);
     }
   }
 
   if (kind === "text") {
-    return truncate(body, maxChars);
+    return paginate(body, offset, maxChars);
   }
 
   // html
@@ -672,7 +695,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     // same-origin-checked against the page we actually fetched, not the
     // pre-redirect input.
     const alt = await tryFollowAlternate(body, finalUrl, currentUa);
-    if (alt !== null) return truncate(alt, maxChars);
+    if (alt !== null) return paginate(alt, offset, maxChars);
   }
 
   const md = await htmlToMarkdown(useExtracted ? extracted : body);
@@ -710,7 +733,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     throw new Error("Site requires JS, cannot fetch in shell-only mode (JS-only shell)");
   }
 
-  return truncate(md, maxChars);
+  return paginate(md, offset, maxChars);
 }
 
 // Try to follow the first allowlisted, same-origin <link rel="alternate">

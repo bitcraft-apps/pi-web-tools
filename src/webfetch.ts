@@ -690,6 +690,30 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }
 
+  // Cross-host redirect notice (issue #133). When the input host differs
+  // from the host the bytes actually came from, prepend a one-line marker
+  // so the model knows where the content originated and can re-fetch the
+  // redirect target directly on follow-ups. Same channel as the trailing
+  // [TRUNCATED — …] footer; in-band marker, not a structured field.
+  //
+  // Compares `URL.host` (host + port if non-default), not `hostname` —
+  // example.com:8443 → example.com is a port change worth flagging.
+  // Same-host path/query rewrites, HTTP→HTTPS upgrades on the same host,
+  // and multi-hop chains that land back on the input host all naturally
+  // produce no notice. www-subdomain differences (example.com →
+  // www.example.com) DO produce a notice — strict host equality, no
+  // public-suffix-list eTLD+1 folding. See issue #133 for the design
+  // decisions; do not re-litigate here.
+  //
+  // Notice is prepended to the source text passed to `paginate`, so the
+  // first chunk (offset=0) carries it and subsequent chunks don't —
+  // matches the issue's "one in-band notice line is the contract" and
+  // keeps the half-open [offset, end) tiling intact.
+  const notice =
+    url.host !== finalUrl.host
+      ? `[REDIRECTED — input was ${url.protocol}//${url.host}/..., final URL is ${finalUrl.toString()}]\n\n`
+      : "";
+
   const cl = response.headers.get("content-length");
   // `Number.isFinite` guard: `Number("abc")` is NaN and any NaN comparison
   // is false, so a garbage Content-Length would slip past this pre-check.
@@ -725,7 +749,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
       // so hardcode it here rather than re-parsing contentType.
       throw new Error(`Cannot fetch application/pdf. Use a tool that supports binary content.`);
     }
-    return paginate(text, offset, maxChars);
+    return paginate(notice + text, offset, maxChars);
   }
 
   const body = await decodeBody(response, kind);
@@ -761,17 +785,17 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
       // mismatches across calls, but a fresh re-call with non-zero
       // offset is always wrong here — fall through to the unwrapped
       // branch so every chunk past offset 0 is self-consistent raw JSON.
-      if (offset === 0 && wrapped.length <= maxChars) {
-        return paginate(wrapped, offset, maxChars);
+      if (offset === 0 && (notice + wrapped).length <= maxChars) {
+        return paginate(notice + wrapped, offset, maxChars);
       }
-      return paginate(pretty, offset, maxChars);
+      return paginate(notice + pretty, offset, maxChars);
     } catch {
-      return paginate(body, offset, maxChars);
+      return paginate(notice + body, offset, maxChars);
     }
   }
 
   if (kind === "text") {
-    return paginate(body, offset, maxChars);
+    return paginate(notice + body, offset, maxChars);
   }
 
   // html
@@ -831,7 +855,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     // same-origin-checked against the page we actually fetched, not the
     // pre-redirect input.
     const alt = await tryFollowAlternate(body, finalUrl, currentUa);
-    if (alt !== null) return paginate(alt, offset, maxChars);
+    if (alt !== null) return paginate(notice + alt, offset, maxChars);
   }
 
   const md = await htmlToMarkdown(useExtracted ? extracted : body);
@@ -869,7 +893,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     throw new Error("Site requires JS, cannot fetch in shell-only mode (JS-only shell)");
   }
 
-  return paginate(md, offset, maxChars);
+  return paginate(notice + md, offset, maxChars);
 }
 
 // Try to follow the first allowlisted, same-origin <link rel="alternate">

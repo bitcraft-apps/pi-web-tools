@@ -193,6 +193,14 @@ function truncate(text: string, max: number): string {
   );
 }
 
+// TEMPORARY stub — Task 2 replaces with real implementation.
+export function paginate(text: string, offset: number, maxChars: number): string {
+  void text;
+  void offset;
+  void maxChars;
+  throw new Error("paginate not implemented");
+}
+
 const MAX_REDIRECTS = 5;
 
 // Single-hop fetch — does NOT follow redirects. Caller is responsible for

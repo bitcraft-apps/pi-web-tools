@@ -24,6 +24,7 @@ vi.mock("../src/lib/pdf.js", () => ({
 import {
   fetchAsMarkdown,
   looksLikeJsShell,
+  paginate,
   parseRetryAfter,
   RETRY_AFTER_MAX_MS,
 } from "../src/webfetch.js";
@@ -1718,5 +1719,56 @@ describe("webfetchTool", () => {
     if (textContent.type === "text") {
       expect(textContent.text).toContain("MD:");
     }
+  });
+});
+
+describe("paginate", () => {
+  it("returns text unchanged when it fits within maxChars (offset=0)", () => {
+    const out = paginate("hello world", 0, 100);
+    expect(out).toBe("hello world");
+  });
+
+  it("appends a TRUNCATED footer naming the next offset when more remains", () => {
+    const text = "x".repeat(1000);
+    const out = paginate(text, 0, 100);
+    expect(out.startsWith("x".repeat(100))).toBe(true);
+    expect(out).toMatch(
+      /\[TRUNCATED — returned chars 0\.\.100 of 1000 total\. Re-call with offset=100 to read the next chunk\.\]/,
+    );
+  });
+
+  it("returns mid-document slice with footer citing the correct next offset", () => {
+    const text = "x".repeat(1000);
+    const out = paginate(text, 200, 300);
+    expect(out.startsWith("x".repeat(300))).toBe(true);
+    expect(out).toMatch(/returned chars 200\.\.500 of 1000 total/);
+    expect(out).toMatch(/offset=500/);
+  });
+
+  it("returns clean last chunk with no footer when slice reaches text.length exactly", () => {
+    const text = "x".repeat(500);
+    const out = paginate(text, 400, 100);
+    expect(out).toBe("x".repeat(100));
+    expect(out).not.toMatch(/TRUNCATED/);
+  });
+
+  it("returns clean last chunk with no footer when maxChars overshoots end", () => {
+    const text = "x".repeat(500);
+    const out = paginate(text, 400, 1000);
+    expect(out).toBe("x".repeat(100));
+    expect(out).not.toMatch(/TRUNCATED/);
+  });
+
+  it("returns past-end marker (does not throw) when offset >= text.length", () => {
+    const text = "x".repeat(500);
+    const out = paginate(text, 500, 100);
+    expect(out).toMatch(/OFFSET 500 PAST END/);
+    expect(out).toMatch(/document is 500 chars total/);
+    expect(out).toMatch(/Re-call with offset=0/);
+  });
+
+  it("past-end marker fires for offset strictly greater than length too", () => {
+    const out = paginate("hello", 999, 50);
+    expect(out).toMatch(/OFFSET 999 PAST END/);
   });
 });

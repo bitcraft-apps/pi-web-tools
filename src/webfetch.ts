@@ -21,6 +21,14 @@ import { ensureText, type FormatterTheme } from "./lib/render.js";
 export interface FetchInput {
   url: string;
   max_chars?: number;
+  /**
+   * Character offset into the extracted markdown. Default 0. Used to
+   * page through documents whose extracted size exceeds
+   * MAX_CHARS_HARD_CAP. The next-offset value is reported in the
+   * truncation footer; callers thread it back here on the next call.
+   * See issue #132.
+   */
+  offset?: number;
 }
 
 const HTML_MIMES = ["text/html", "application/xhtml+xml"];
@@ -184,13 +192,122 @@ function classifyMime(ct: string): BodyKind | "binary" {
   return "text";
 }
 
-function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
+// Slice the extracted markdown for the LLM. Pagination via `offset` is the
+// only way to reach content past MAX_CHARS_HARD_CAP — see issue #132. The
+// footer is the sole signaling channel: when more remains, it names the
+// exact next offset; when the slice reaches end-of-document, no footer is
+// appended; when offset overshoots the document, a self-correcting marker
+// is returned in lieu of an error so the model can recover.
+//
+// Exported for unit tests and so callers building paginated workflows can
+// reason about the shape directly. Validates its own inputs — fetchAsMarkdown
+// also pre-validates, but `paginate` is exported, so direct callers must not
+// be able to wedge it into a past-end loop with a maxChars of 0.
+export function paginate(text: string, offset: number, maxChars: number): string {
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error(`Invalid offset: ${offset} (must be a non-negative integer)`);
+  }
+  if (!Number.isInteger(maxChars) || maxChars < 1) {
+    throw new Error(`Invalid maxChars: ${maxChars} (must be a positive integer)`);
+  }
   const total = text.length;
-  return (
-    text.slice(0, max) +
-    `\n\n[TRUNCATED — fetched ${max} chars of ${total} total. Re-call with higher max_chars or different URL to read more.]`
-  );
+  // Empty document at offset=0 is a legitimate result (e.g. 204-shaped
+  // text body, blank markdown after extraction); return "" rather than
+  // a past-end recovery marker, which would mislead the model into
+  // thinking it asked for the wrong offset.
+  if (total === 0 && offset === 0) return "";
+  if (offset >= total) {
+    // Past-end is reachable via legitimate "next chunk" requests near the
+    // tail; throwing would force the caller to add boundary-detection
+    // logic for a value we know unambiguously. A self-describing marker
+    // is better UX than an exception.
+    //
+    // No "retry from offset=0" hint: an agent only reaches past-end when
+    // (a) the document shrank between calls (race; restart hits the same
+    // race) or (b) its own offset arithmetic is off (restart wastes a
+    // fetch). The honest signal is "the prior chunk was already the
+    // tail" — the caller decides whether to re-fetch from 0 or stop.
+    return `[OFFSET ${offset} PAST END — document is ${total} chars total. If the document was expected to be longer, it shrank between calls (no cache; each fetch re-runs the pipeline).]`;
+  }
+  let end = Math.min(offset + maxChars, total);
+  // Snap end down by one if the chunk would end mid-surrogate-pair: a lone
+  // high surrogate in the chunk text isn't just cosmetic — the agent's JSON
+  // transport stringifies tool output, and `JSON.stringify` of a lone
+  // surrogate emits a `\udxxx` escape that downstream UTF-8 decoders may
+  // reject (well-formed-JSON consumers since RFC 8259 §8.2). Mirroring the
+  // snap into the next-offset keeps the half-open [offset, end) tiling
+  // exact, so chunks still concatenate losslessly.
+  //
+  // Skip when the chunk reaches end-of-document (no next call to receive
+  // the deferred low surrogate) or when the chunk is one char long
+  // (snapping would empty the slice — the high half ships now and the
+  // low half ships at the next offset). Production callers can't reach
+  // maxChars=1: schema enforces `minimum: 2` and `fetchAsMarkdown`
+  // clamps direct callers to the same floor. The branch survives only
+  // for `paginate`'s exported test surface, which still accepts 1.
+  //
+  // The guard is intentionally one-sided (chunk *end* only). At the
+  // chunk *start* the symmetric case — `offset` landing on a lone low
+  // surrogate — can only happen if a previous call shipped a lone high
+  // surrogate (i.e. the maxChars=1 escape hatch above fired). Schema
+  // and runtime both forbid maxChars=1 in production, so the asymmetry
+  // is a true invariant; adding a start-side snap would silently drop
+  // the low half and break the half-open [offset, end) tiling guarantee.
+  if (end < total && end - 1 > offset) {
+    const last = text.charCodeAt(end - 1);
+    if (last >= 0xd800 && last <= 0xdbff) end--;
+  }
+  const slice = text.slice(offset, end);
+  if (end >= total) return slice; // last chunk — no footer
+  // Range is half-open: `offset` is inclusive, `end` is exclusive (matches
+  // String.prototype.slice). The next-chunk hint reuses `end` as the
+  // inclusive start of the following call, so [offset, end) tiles cleanly.
+  return slice + buildPaginationFooter(offset, end, total);
+}
+
+// Single source of truth for the pagination footer wording. The emitted
+// string and the strip regex are both derived from the template parts
+// below so a reword can't desync them — a typo in the literal would
+// otherwise silently no-op `stripPaginationFooter` and break
+// reconstruction tests. Kept module-private; tests strip via
+// `stripPaginationFooter`.
+const PAGINATION_FOOTER_PARTS = [
+  "\n\n[TRUNCATED — returned chars [",
+  ", ",
+  ") of ",
+  " total. Re-call with offset=",
+  " to read the next chunk.]",
+] as const;
+
+function buildPaginationFooter(offset: number, end: number, total: number): string {
+  const [a, b, c, d, e] = PAGINATION_FOOTER_PARTS;
+  return `${a}${offset}${b}${end}${c}${total}${d}${end}${e}`;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const PAGINATION_FOOTER_RE = new RegExp(
+  PAGINATION_FOOTER_PARTS.map(escapeRegex).join("\\d+") + "$",
+);
+
+/**
+ * Strip the trailing TRUNCATED footer (if any) from a paginated chunk so
+ * sequential chunks can be concatenated for reconstruction. Co-located
+ * with `paginate` and the footer regex so a footer reword stays
+ * single-source-of-truth. Exported for tests; production callers don't
+ * need this — the agent threads `offset` forward without reassembling.
+ *
+ * Does NOT strip the `[OFFSET N PAST END …]` marker: that marker is a
+ * standalone diagnostic returned in lieu of a chunk, not a footer
+ * appended to one. Reconstruction tests bound their offsets to the body
+ * and never observe it; if you walk one chunk past the tail (e.g. as a
+ * boundary probe), filter the marker at the call site rather than
+ * teaching this helper to swallow it.
+ */
+export function stripPaginationFooter(s: string): string {
+  return s.replace(PAGINATION_FOOTER_RE, "");
 }
 
 const MAX_REDIRECTS = 5;
@@ -508,7 +625,37 @@ async function maybeRetryAfter(
 
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   const url = validateUrl(input.url);
-  const maxChars = Math.min(Math.max(1, input.max_chars ?? MAX_CHARS_DEFAULT), MAX_CHARS_HARD_CAP);
+  // Runtime floor is 2, mirroring the schema's `minimum: 2`. Direct
+  // `fetchAsMarkdown` callers bypass schema validation, so the clamp here
+  // is what makes paginate's end-side surrogate-snap asymmetry a true
+  // invariant: at maxChars=1 the snap would empty the slice and the
+  // half-open tiling would desync. See `paginate` and the `max_chars`
+  // schema field for the full rationale.
+  const maxChars = Math.min(Math.max(2, input.max_chars ?? MAX_CHARS_DEFAULT), MAX_CHARS_HARD_CAP);
+  // Defensive cap (issue #132): the extracted markdown can never exceed
+  // MAX_RESPONSE_BYTES (5 MB). The cap compares JS string units against a
+  // byte budget; this is a deliberately loose upper bound, not a tight
+  // invariant. Pandoc/trafilatura can grow output (list bullets, escaped
+  // chars, repeated extracted headings), so the post-extraction string
+  // length is not strictly ≤ wire-byte count — but it stays well under
+  // any offset that would survive the response-size cap below. The point
+  // here is just to reject pathological offsets (e.g. 2^53) up front so
+  // they can't allocate or motivate an unbounded slice; an exact bound
+  // would buy nothing.
+  const offset = input.offset ?? 0;
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error(`Invalid offset: ${offset} (must be a non-negative integer)`);
+  }
+  // `>=`, not `>`: offset === MAX_RESPONSE_BYTES is guaranteed-past-end
+  // (total <= MAX_RESPONSE_BYTES by the response-size cap), so the
+  // request would always return the past-end marker — a no-op offset.
+  // Mirrors the schema cap (`maximum: MAX_RESPONSE_BYTES - 1`); single
+  // source of truth across schema-validated and direct callers.
+  if (offset >= MAX_RESPONSE_BYTES) {
+    throw new Error(
+      `offset ${offset} exceeds the maximum addressable range (${MAX_RESPONSE_BYTES} = MAX_RESPONSE_BYTES); documents that large are not supported`,
+    );
+  }
 
   // If the first attempt throws (e.g. SSRF guard tripped on a redirect),
   // we deliberately do NOT fall through to the CF UA-swap retry — blocked
@@ -578,7 +725,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
       // so hardcode it here rather than re-parsing contentType.
       throw new Error(`Cannot fetch application/pdf. Use a tool that supports binary content.`);
     }
-    return truncate(text, maxChars);
+    return paginate(text, offset, maxChars);
   }
 
   const body = await decodeBody(response, kind);
@@ -586,14 +733,45 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   if (kind === "json") {
     try {
       const pretty = JSON.stringify(JSON.parse(body), null, 2);
-      return truncate("```json\n" + pretty + "\n```", maxChars);
+      const wrapped = "```json\n" + pretty + "\n```";
+      // Gate the ```json fences on "fits in one chunk". If we wrapped a
+      // body that paginates, chunk[1+] would slice into the body without
+      // an opening fence and without a trailing close — silent corruption
+      // for any agent that renders fenced markdown. Falling back to the
+      // raw pretty-printed body keeps every chunk self-consistent at the
+      // cost of losing the language hint on large JSON responses.
+      //
+      // The gate is per-call, not stable across paginated calls of the
+      // same URL: there is no cache, so a body that changed size between
+      // calls could wrap at one offset and unwrap at another (in either
+      // direction — grew → wrap-then-unwrap, shrank → unwrap-then-wrap).
+      // The grow case is benign: the wrapped branch fits in a single
+      // chunk and emits no footer, so the agent never re-calls. The
+      // shrink case (unwrap at N=0 → wrap at N>0) lands the re-call past
+      // the end of the now-smaller wrapped body, which the past-end
+      // marker in `paginate` reports honestly — that recovery path is
+      // the intended fallback here, same as for any other mid-pagination
+      // mutation.
+      //
+      // Belt-and-braces: also gate on `offset === 0`. Without it, an
+      // agent that re-calls with offset>0 against a wrapped body that
+      // happens to fit in one chunk would receive a fenceless tail of
+      // JSON (`paginate` slices `wrapped[offset:]`, dropping the opening
+      // ```json fence). The shrink-case rationale above covers wrapping
+      // mismatches across calls, but a fresh re-call with non-zero
+      // offset is always wrong here — fall through to the unwrapped
+      // branch so every chunk past offset 0 is self-consistent raw JSON.
+      if (offset === 0 && wrapped.length <= maxChars) {
+        return paginate(wrapped, offset, maxChars);
+      }
+      return paginate(pretty, offset, maxChars);
     } catch {
-      return truncate(body, maxChars);
+      return paginate(body, offset, maxChars);
     }
   }
 
   if (kind === "text") {
-    return truncate(body, maxChars);
+    return paginate(body, offset, maxChars);
   }
 
   // html
@@ -653,7 +831,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     // same-origin-checked against the page we actually fetched, not the
     // pre-redirect input.
     const alt = await tryFollowAlternate(body, finalUrl, currentUa);
-    if (alt !== null) return truncate(alt, maxChars);
+    if (alt !== null) return paginate(alt, offset, maxChars);
   }
 
   const md = await htmlToMarkdown(useExtracted ? extracted : body);
@@ -691,7 +869,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     throw new Error("Site requires JS, cannot fetch in shell-only mode (JS-only shell)");
   }
 
-  return truncate(md, maxChars);
+  return paginate(md, offset, maxChars);
 }
 
 // Try to follow the first allowlisted, same-origin <link rel="alternate">
@@ -848,6 +1026,32 @@ const webfetchSchema = Type.Object({
     Type.Number({
       description: `Truncate output at N chars (default ${MAX_CHARS_DEFAULT}, hard cap ${MAX_CHARS_HARD_CAP}).`,
       default: MAX_CHARS_DEFAULT,
+      // `minimum: 2` makes `paginate`'s end-side surrogate-snap
+      // asymmetry a true schema invariant rather than a "production
+      // callers don't reach maxChars=1" assumption: at maxChars=1 the
+      // snap would empty the slice, so `paginate` deliberately ships a
+      // lone high surrogate instead — the only path that can desync the
+      // half-open [offset, end) tiling. Schema rejects what runtime
+      // would otherwise have to special-case.
+      minimum: 2,
+    }),
+  ),
+  offset: Type.Optional(
+    // Type.Integer (not Type.Number) so schema validation rejects 1.5 /
+    // negatives / out-of-range up front, before fetchAsMarkdown's runtime
+    // throw. The runtime guard remains as defense-in-depth for callers
+    // that bypass schema validation (e.g. direct fetchAsMarkdown imports).
+    Type.Integer({
+      minimum: 0,
+      // -1 because the runtime past-end short-circuit makes
+      // offset === MAX_RESPONSE_BYTES a no-op (always returns the
+      // past-end marker, since total <= MAX_RESPONSE_BYTES). Single
+      // source of truth: schema rejects what runtime would treat as
+      // garbage.
+      maximum: MAX_RESPONSE_BYTES - 1,
+      description:
+        "Character offset into the extracted markdown (default 0). When the previous fetch returned a `[TRUNCATED ... Re-call with offset=N ...]` footer, pass that N here to read the next chunk. There is no cache between calls — each paginated read re-fetches and re-extracts.",
+      default: 0,
     }),
   ),
 });
@@ -869,6 +1073,7 @@ export interface WebfetchToolDetails {
 export interface WebfetchCallArgs {
   url?: string;
   max_chars?: number;
+  offset?: number;
 }
 
 /**
@@ -975,6 +1180,12 @@ export function formatWebfetchCall(
   if (typeof args?.max_chars === "number" && args.max_chars !== MAX_CHARS_DEFAULT) {
     text += " " + theme.fg("muted", `max_chars=${args.max_chars}`);
   }
+  // Mirror the max_chars convention: only show offset when the LLM passed
+  // a non-default (i.e. paginated re-read), so the common single-shot
+  // header stays compact. Issue #132.
+  if (typeof args?.offset === "number" && args.offset !== 0) {
+    text += " " + theme.fg("muted", `offset=${args.offset}`);
+  }
   return text;
 }
 
@@ -1064,10 +1275,17 @@ export const webfetchTool = defineTool<typeof webfetchSchema, WebfetchToolDetail
   name: "webfetch",
   label: "Web Fetch",
   description:
-    "Fetch a URL and return its main text content as markdown. HTML is converted via pandoc or w3m. If `trafilatura` or `rdrview` is on $PATH, runs a Reader-View-style extraction pre-pass to strip page chrome (nav/sidebar/footer), typically shrinking output 5–20× on chrome-heavy pages. Falls back transparently to the full page if no extractor is installed or extraction looks wrong. Use after `websearch` to read full content of a result, or directly when user gives you a URL. Cannot fetch binary content (PDF, images). Cannot reach localhost or RFC1918 link-local addresses.",
+    "Fetch a URL and return its main text content as markdown. HTML is converted via pandoc or w3m. If `trafilatura` or `rdrview` is on $PATH, runs a Reader-View-style extraction pre-pass to strip page chrome (nav/sidebar/footer), typically shrinking output 5–20× on chrome-heavy pages. Falls back transparently to the full page if no extractor is installed or extraction looks wrong. Use after `websearch` to read full content of a result, or directly when user gives you a URL. For documents larger than `max_chars`, re-call with the `offset` value reported in the truncation footer to read the next chunk (no cache — each paginated call re-fetches and re-extracts; PDFs re-spawn pdftotext on every call, so prefer one large `max_chars` over multiple paginated reads). Cannot fetch binary content (PDF, images). Cannot reach localhost or RFC1918 link-local addresses.",
   parameters: webfetchSchema,
   async execute(_id, params, _signal, _onUpdate, _ctx) {
-    const md = await fetchAsMarkdown({ url: params.url, max_chars: params.max_chars });
+    // Structural pass-through (not a cast): listing each field makes the
+    // compiler catch schema/FetchInput drift here instead of relying on an
+    // assertion to silently paper over a rename.
+    const md = await fetchAsMarkdown({
+      url: params.url,
+      max_chars: params.max_chars,
+      offset: params.offset,
+    });
     return {
       content: [{ type: "text", text: md }],
       details: { url: params.url, chars: md.length, bytes: Buffer.byteLength(md, "utf-8") },

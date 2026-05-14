@@ -24,8 +24,10 @@ vi.mock("../src/lib/pdf.js", () => ({
 import {
   fetchAsMarkdown,
   looksLikeJsShell,
+  paginate,
   parseRetryAfter,
   RETRY_AFTER_MAX_MS,
+  stripPaginationFooter,
 } from "../src/webfetch.js";
 import { htmlToMarkdown } from "../src/lib/html2md.js";
 import { extractContent } from "../src/lib/extract.js";
@@ -67,6 +69,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// Note: chunks are stripped of their TRUNCATED footer (via the helper
+// imported from src/webfetch.ts) before concatenation — single source of
+// truth for the footer wording.
+
 describe("fetchAsMarkdown", () => {
   it("blocks non-http schemes via url-guard", async () => {
     await expect(fetchAsMarkdown({ url: "ftp://example.com" })).rejects.toThrow(/scheme/i);
@@ -95,6 +101,40 @@ describe("fetchAsMarkdown", () => {
     const md = await fetchAsMarkdown({ url: "https://example.com/x.json" });
     expect(md).toMatch(/```json/);
     expect(md).toContain('"a": 1');
+  });
+
+  it("drops the ```json fence when the wrapped body would paginate (avoids silent corruption)", async () => {
+    // Pretty-print of a long JSON array overflows max_chars. With fences,
+    // chunk[0] would open ```json but no chunk would close it, and chunk[1+]
+    // would slice into the body without an opening fence — silent corruption.
+    // The gate falls back to raw pretty-printed JSON for paginated bodies.
+    const big = JSON.stringify(Array.from({ length: 5000 }, (_, i) => ({ i, v: "x".repeat(20) })));
+    mockFetchOnce({ body: big, headers: { "content-type": "application/json" } });
+    const md = await fetchAsMarkdown({
+      url: "https://example.com/big.json",
+      max_chars: 50_000,
+    });
+    // No opening fence, because emitting one we can't close (or can't
+    // re-emit on chunk[1+]) is worse than no fence at all.
+    expect(md).not.toMatch(/```json/);
+    // But it's still pretty-printed (newline + 2-space indent), proving
+    // we kept the JSON.parse → JSON.stringify path and only dropped fences.
+    expect(md).toMatch(/\n {4}"i": 0/);
+    expect(md).toMatch(/TRUNCATED/);
+
+    // Continuation must also be raw (no stray opening fence on chunk[1+],
+    // no orphan closing ``` either) — the corruption claim in the
+    // comment is about chunk[1+], not chunk[0]. Without this, a
+    // regression that re-emitted ```json at every chunk start (or that
+    // closed the fence on chunk[0] and reopened on chunk[1]) would
+    // satisfy the chunk[0] assertions above.
+    mockFetchOnce({ body: big, headers: { "content-type": "application/json" } });
+    const md2 = await fetchAsMarkdown({
+      url: "https://example.com/big.json",
+      max_chars: 50_000,
+      offset: 50_000,
+    });
+    expect(md2).not.toMatch(/```/);
   });
 
   it("throws on PDF when pdftotext is unavailable (preserves pre-#119 error)", async () => {
@@ -141,7 +181,9 @@ describe("fetchAsMarkdown", () => {
     vi.mocked(pdfToText).mockResolvedValueOnce("x".repeat(1000));
     mockFetchOnce({ body: "%PDF", headers: { "content-type": "application/pdf" } });
     const out = await fetchAsMarkdown({ url: "https://example.com/x.pdf", max_chars: 50 });
-    expect(out).toMatch(/TRUNCATED/);
+    expect(out).toMatch(
+      /\[TRUNCATED — returned chars \[0, 50\) of 1000 total\. Re-call with offset=50/,
+    );
     expect(out.length).toBeLessThanOrEqual(50 + 200);
   });
 
@@ -228,12 +270,218 @@ describe("fetchAsMarkdown", () => {
     expect(htmlToMarkdown).toHaveBeenCalledTimes(1);
   });
 
-  it("truncates output to max_chars with footer", async () => {
+  it("truncates output to max_chars with footer naming the next offset (issue #132)", async () => {
     const longHtml = "<p>" + "x".repeat(100) + "</p>";
     mockFetchOnce({ body: longHtml });
     const md = await fetchAsMarkdown({ url: "https://example.com", max_chars: 5 });
     expect(md.length).toBeLessThanOrEqual(5 + 200); // body + footer
-    expect(md).toMatch(/TRUNCATED/);
+    expect(md).toMatch(
+      /\[TRUNCATED — returned chars \[0, 5\) of \d+ total\. Re-call with offset=5/,
+    );
+  });
+
+  it("rejects negative offset (issue #132)", async () => {
+    // No fetch mock needed — validation runs before the network call.
+    await expect(fetchAsMarkdown({ url: "https://example.com", offset: -1 })).rejects.toThrow(
+      /invalid offset/i,
+    );
+  });
+
+  it("rejects non-integer offset (issue #132)", async () => {
+    await expect(fetchAsMarkdown({ url: "https://example.com", offset: 1.5 })).rejects.toThrow(
+      /invalid offset/i,
+    );
+  });
+
+  it("rejects offset > MAX_RESPONSE_BYTES (issue #132)", async () => {
+    await expect(
+      fetchAsMarkdown({ url: "https://example.com", offset: MAX_RESPONSE_BYTES + 1 }),
+    ).rejects.toThrow(/exceeds the maximum addressable range/i);
+  });
+
+  it("rejects offset === MAX_RESPONSE_BYTES at the boundary (issue #132)", async () => {
+    // Pins the `>=` (not `>`) check in fetchAsMarkdown: total length is
+    // capped at MAX_RESPONSE_BYTES, so offset === MAX_RESPONSE_BYTES is
+    // guaranteed past-end and gets rejected up front rather than reaching
+    // paginate's marker. Companion to the `MAX_RESPONSE_BYTES + 1` test
+    // above and the `MAX_RESPONSE_BYTES - 1` boundary below; together
+    // they prove the schema cap (`maximum: MAX_RESPONSE_BYTES - 1`) and
+    // runtime cap agree at the seam.
+    await expect(
+      fetchAsMarkdown({ url: "https://example.com", offset: MAX_RESPONSE_BYTES }),
+    ).rejects.toThrow(/exceeds the maximum addressable range/i);
+  });
+
+  it("accepts offset === MAX_RESPONSE_BYTES - 1 at the boundary (issue #132)", async () => {
+    // Mirror of the rejection boundary: the schema's `maximum:
+    // MAX_RESPONSE_BYTES - 1` is the largest legal offset, and runtime
+    // must accept it (no early reject) so schema and runtime agree.
+    // Body is well under that offset, so paginate returns the past-end
+    // marker — the assertion is only that we reach paginate at all,
+    // not that the offset hits content.
+    mockFetchOnce({ body: "<h1>tiny</h1>" });
+    const out = await fetchAsMarkdown({
+      url: "https://example.com",
+      offset: MAX_RESPONSE_BYTES - 1,
+    });
+    expect(out).toMatch(/PAST END/);
+  });
+
+  it("offset past extracted-markdown length returns past-end marker, not error (issue #132)", async () => {
+    // Body well under MAX_RESPONSE_BYTES so the cap above doesn't trip;
+    // offset chosen larger than the markdown htmlToMarkdown will produce.
+    mockFetchOnce({ body: "<h1>tiny</h1>" });
+    const out = await fetchAsMarkdown({ url: "https://example.com", offset: 10_000 });
+    expect(out).toMatch(/OFFSET 10000 PAST END/);
+  });
+
+  it("paginates content larger than max_chars across sequential calls (issue #132)", async () => {
+    // Use the text/plain branch (verbatim body — same paginate() call site)
+    // so the test isn't constrained by the htmlToMarkdown mock's 20-char cap.
+    // No cache between calls (issue #132) — each fetch is mocked independently.
+    const big = "y".repeat(450_000);
+    mockFetchOnce({ body: big, headers: { "content-type": "text/plain" } });
+    const part1 = await fetchAsMarkdown({ url: "https://example.com/big.txt" });
+
+    mockFetchOnce({ body: big, headers: { "content-type": "text/plain" } });
+    const chunk0 = await fetchAsMarkdown({
+      url: "https://example.com/big.txt",
+      max_chars: 200_000,
+      offset: 0,
+    });
+    mockFetchOnce({ body: big, headers: { "content-type": "text/plain" } });
+    const chunk1 = await fetchAsMarkdown({
+      url: "https://example.com/big.txt",
+      max_chars: 200_000,
+      offset: 200_000,
+    });
+    mockFetchOnce({ body: big, headers: { "content-type": "text/plain" } });
+    const chunk2 = await fetchAsMarkdown({
+      url: "https://example.com/big.txt",
+      max_chars: 200_000,
+      offset: 400_000,
+    });
+
+    const reconstructed =
+      stripPaginationFooter(chunk0) + stripPaginationFooter(chunk1) + stripPaginationFooter(chunk2);
+    expect(reconstructed.length).toBe(450_000);
+    expect(reconstructed).toBe(big);
+
+    expect(chunk0).toMatch(/offset=200000/);
+    expect(chunk1).toMatch(/offset=400000/);
+    // Last chunk is exactly the tail (50K of body), no footer.
+    expect(chunk2).not.toMatch(/TRUNCATED/);
+    expect(chunk2.length).toBe(50_000);
+
+    // Sanity: default-max-chars call truncates — proves pagination is needed.
+    expect(part1.length).toBeLessThan(big.length);
+    expect(part1).toMatch(/TRUNCATED/);
+  });
+
+  it("reconstructed output desyncs when upstream changes mid-pagination (issue #132)", async () => {
+    // Proves the README's "no cache — each paginated call re-fetches"
+    // warning is real, not speculative: if the upstream body changes
+    // between calls (page edited, dynamic content, A/B variant), the
+    // chunks no longer come from a single document and reconstruction is
+    // garbage — even though every individual call succeeds and the
+    // footer arithmetic stays internally consistent per chunk.
+    const bodyA = "a".repeat(450_000);
+    const bodyB = "b".repeat(450_000); // same length, different content
+
+    mockFetchOnce({ body: bodyA, headers: { "content-type": "text/plain" } });
+    const chunk0 = await fetchAsMarkdown({
+      url: "https://example.com/mutating.txt",
+      max_chars: 200_000,
+      offset: 0,
+    });
+    mockFetchOnce({ body: bodyB, headers: { "content-type": "text/plain" } });
+    const chunk1 = await fetchAsMarkdown({
+      url: "https://example.com/mutating.txt",
+      max_chars: 200_000,
+      offset: 200_000,
+    });
+    mockFetchOnce({ body: bodyA, headers: { "content-type": "text/plain" } });
+    const chunk2 = await fetchAsMarkdown({
+      url: "https://example.com/mutating.txt",
+      max_chars: 200_000,
+      offset: 400_000,
+    });
+
+    const reconstructed =
+      stripPaginationFooter(chunk0) + stripPaginationFooter(chunk1) + stripPaginationFooter(chunk2);
+
+    // Reconstruction is corrupt: it equals neither bodyA nor bodyB. The
+    // behavioral claim is the inequality — we deliberately don't assert
+    // exact a/b boundaries on the synthetic mock, since those are
+    // implementation details of this fixture and add maintenance cost
+    // without strengthening the signal.
+    expect(reconstructed).not.toBe(bodyA);
+    expect(reconstructed).not.toBe(bodyB);
+    expect(reconstructed.length).toBe(450_000);
+    // Positional assertion: chunk1 came from bodyB, so the byte at
+    // index 250_000 (50K into chunk1) must be 'b'. Without this, a
+    // hypothetical regression that returned bodyA on every call would
+    // still satisfy the inequality (bodyA != reconstructed-with-footers-
+    // stripped is false — wait, identical bodies would reconstruct to
+    // bodyA). Guards against that: a chunk-mix-up that loses bodyB
+    // entirely would also flip this char back to 'a'.
+    expect(reconstructed[250_000]).toBe("b");
+  });
+
+  it("reconstructed output desyncs when upstream changes length mid-pagination (issue #132)", async () => {
+    // Companion to the equal-length desync test above. The more common
+    // real-world case is a page edited shorter or longer between calls,
+    // which exercises the footer's offset arithmetic against a now-wrong
+    // `total`: the chunk0 footer cites total=450_000 and points at
+    // offset=200_000, but the second fetch sees total=300_000 — so the
+    // re-call lands two-thirds into a different document. Demonstrates
+    // that the per-chunk-internally-consistent footer still misleads
+    // reconstruction when `total` itself moves under it.
+    const bodyA = "a".repeat(450_000);
+    const bodyB = "b".repeat(300_000); // shorter — different total
+
+    mockFetchOnce({ body: bodyA, headers: { "content-type": "text/plain" } });
+    const chunk0 = await fetchAsMarkdown({
+      url: "https://example.com/shrinking.txt",
+      max_chars: 200_000,
+      offset: 0,
+    });
+    // chunk0's footer says "total=450_000, next offset=200_000". An
+    // honest re-call threads that 200_000 forward; the now-shorter bodyB
+    // happily serves a chunk starting at offset=200_000 (within its
+    // 300_000 length), but it's the wrong document.
+    mockFetchOnce({ body: bodyB, headers: { "content-type": "text/plain" } });
+    const chunk1 = await fetchAsMarkdown({
+      url: "https://example.com/shrinking.txt",
+      max_chars: 200_000,
+      offset: 200_000,
+    });
+
+    expect(chunk0).toMatch(/of 450000 total/);
+    // chunk1's footer reports the new (shorter) total — internally
+    // consistent per call, but desynced from chunk0's view of the world.
+    // bodyB at offset=200_000 has 100_000 chars left, so chunk1 is the
+    // tail (no footer) of bodyB, not a continuation of bodyA.
+    expect(chunk1).not.toMatch(/TRUNCATED/);
+    expect(stripPaginationFooter(chunk1)).toBe("b".repeat(100_000));
+
+    const reconstructed = stripPaginationFooter(chunk0) + stripPaginationFooter(chunk1);
+    expect(reconstructed).not.toBe(bodyA);
+    expect(reconstructed).not.toBe(bodyB);
+    // 200K of 'a' followed by 100K of 'b' — garbage, but every
+    // individual call succeeded with an internally-consistent footer.
+    expect(reconstructed.length).toBe(300_000);
+    expect(reconstructed[199_999]).toBe("a");
+    expect(reconstructed[200_000]).toBe("b");
+    // Symmetric mid-chunk positional asserts mirroring the equal-length
+    // desync test above (`reconstructed[250_000] === "b"`): pin one
+    // index inside chunk0 (bodyA territory) and one inside chunk1
+    // (bodyB territory) so a chunk-mix-up regression is caught from
+    // both sides, not just at the seam. Note: total length is exactly
+    // 300_000, so 250_000 is the mid-chunk1 position (chunk1 covers
+    // indices 200_000…299_999); 300_000 itself would be undefined.
+    expect(reconstructed[100_000]).toBe("a");
+    expect(reconstructed[250_000]).toBe("b");
   });
 
   it("rejects response > 5MB via content-length", async () => {
@@ -1718,5 +1966,113 @@ describe("webfetchTool", () => {
     if (textContent.type === "text") {
       expect(textContent.text).toContain("MD:");
     }
+  });
+});
+
+describe("paginate", () => {
+  it("returns text unchanged when it fits within maxChars (offset=0)", () => {
+    const out = paginate("hello world", 0, 100);
+    expect(out).toBe("hello world");
+  });
+
+  it("appends a TRUNCATED footer naming the next offset when more remains", () => {
+    const text = "x".repeat(1000);
+    const out = paginate(text, 0, 100);
+    expect(out.startsWith("x".repeat(100))).toBe(true);
+    expect(out).toMatch(
+      /\[TRUNCATED — returned chars \[0, 100\) of 1000 total\. Re-call with offset=100 to read the next chunk\.\]/,
+    );
+  });
+
+  it("returns mid-document slice with footer citing the correct next offset", () => {
+    const text = "x".repeat(1000);
+    const out = paginate(text, 200, 300);
+    expect(out.startsWith("x".repeat(300))).toBe(true);
+    expect(out).toMatch(/returned chars \[200, 500\) of 1000 total/);
+    expect(out).toMatch(/offset=500/);
+  });
+
+  it("returns clean last chunk with no footer when slice reaches text.length exactly", () => {
+    const text = "x".repeat(500);
+    const out = paginate(text, 400, 100);
+    expect(out).toBe("x".repeat(100));
+    expect(out).not.toMatch(/TRUNCATED/);
+  });
+
+  it("returns clean last chunk with no footer when maxChars overshoots end", () => {
+    const text = "x".repeat(500);
+    const out = paginate(text, 400, 1000);
+    expect(out).toBe("x".repeat(100));
+    expect(out).not.toMatch(/TRUNCATED/);
+  });
+
+  it("returns past-end marker (does not throw) when offset >= text.length", () => {
+    const text = "x".repeat(500);
+    const out = paginate(text, 500, 100);
+    expect(out).toMatch(/OFFSET 500 PAST END/);
+    expect(out).toMatch(/document is 500 chars total/);
+    expect(out).toMatch(/shrank between calls/);
+    // No "retry from offset=0" hint — restart-from-zero hits the same race
+    // (doc shrank between calls) and wastes a fetch on an arithmetic error.
+    expect(out).not.toMatch(/Re-call with offset=0/);
+  });
+
+  it("past-end marker fires for offset strictly greater than length too", () => {
+    const out = paginate("hello", 999, 50);
+    expect(out).toMatch(/OFFSET 999 PAST END/);
+  });
+
+  it("returns empty string for empty document at offset=0 (not the past-end marker)", () => {
+    // An empty extracted body is a legitimate result (e.g. a 204-shaped
+    // text response, or a page that extracts down to nothing). Returning
+    // the past-end recovery marker here would mislead the model into
+    // thinking it asked for the wrong offset.
+    const out = paginate("", 0, 100);
+    expect(out).toBe("");
+  });
+
+  it("still returns past-end marker for empty document at offset > 0", () => {
+    const out = paginate("", 5, 100);
+    expect(out).toMatch(/OFFSET 5 PAST END/);
+    expect(out).toMatch(/document is 0 chars total/);
+  });
+
+  it("rejects maxChars < 1 (direct caller could otherwise infinite-loop past end)", () => {
+    expect(() => paginate("hi", 0, 0)).toThrow(/invalid maxchars/i);
+    expect(() => paginate("hi", 0, -1)).toThrow(/invalid maxchars/i);
+  });
+
+  it("rejects non-integer maxChars", () => {
+    expect(() => paginate("hi", 0, 1.5)).toThrow(/invalid maxchars/i);
+  });
+
+  it("rejects negative / non-integer offset", () => {
+    expect(() => paginate("hi", -1, 10)).toThrow(/invalid offset/i);
+    expect(() => paginate("hi", 1.5, 10)).toThrow(/invalid offset/i);
+  });
+
+  it("snaps chunk end down by one when boundary lands inside a surrogate pair", () => {
+    // "\uD83D\uDE00" = U+1F600 (😀, two UTF-16 code units). With
+    // maxChars=3 the naive slice(0, 3) of "xy😀" splits the surrogate pair
+    // and emits "xy" + lone high surrogate — which JSON.stringify in the
+    // agent transport encodes as a \udxxx escape that strict UTF-8
+    // consumers may reject. Snapping to a code-point boundary keeps the
+    // chunk well-formed and mirrors the adjustment into the next-offset so
+    // [offset, end) tiles cleanly.
+    const text = "xy\uD83D\uDE00"; // 4 code units, 3 code points
+    const chunk0 = paginate(text, 0, 3);
+    expect(chunk0).toMatch(/^xy\n\n\[TRUNCATED — returned chars \[0, 2\)/);
+    expect(chunk0).toMatch(/offset=2/);
+    // The deferred surrogate pair lands intact in the next chunk, so
+    // concatenation is lossless.
+    const chunk1 = paginate(text, 2, 3);
+    expect(stripPaginationFooter(chunk0) + stripPaginationFooter(chunk1)).toBe(text);
+  });
+
+  it("does not snap on the final chunk (no next call to receive the deferred half)", () => {
+    // boundary at end-of-document — no footer, no snap, ship as-is.
+    const text = "x\uD83D\uDE00";
+    const out = paginate(text, 0, 100);
+    expect(out).toBe(text);
   });
 });

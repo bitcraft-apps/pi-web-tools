@@ -709,9 +709,21 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // first chunk (offset=0) carries it and subsequent chunks don't —
   // matches the issue's "one in-band notice line is the contract" and
   // keeps the half-open [offset, end) tiling intact.
+  // Strip userinfo before echoing the final URL: a redirect to
+  // https://user:token@evil.example/ would otherwise leak the credential
+  // into the markdown the model then logs. Query/fragment are preserved
+  // because they're part of the redirect target the model may want to
+  // re-fetch directly.
+  let finalUrlForNotice = finalUrl.toString();
+  if (finalUrl.username || finalUrl.password) {
+    const sanitized = new URL(finalUrl.toString());
+    sanitized.username = "";
+    sanitized.password = "";
+    finalUrlForNotice = sanitized.toString();
+  }
   const notice =
     url.host !== finalUrl.host
-      ? `[REDIRECTED — input was ${url.protocol}//${url.host}/..., final URL is ${finalUrl.toString()}]\n\n`
+      ? `[REDIRECTED — input was ${url.protocol}//${url.host}, final URL is ${finalUrlForNotice}]\n\n`
       : "";
 
   const cl = response.headers.get("content-length");
@@ -785,6 +797,12 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
       // mismatches across calls, but a fresh re-call with non-zero
       // offset is always wrong here — fall through to the unwrapped
       // branch so every chunk past offset 0 is self-consistent raw JSON.
+      //
+      // Length gate is on `(notice + wrapped).length` (not `wrapped.length`)
+      // because the notice is what gets prepended to the source passed to
+      // `paginate`. Don't "simplify" this back to `wrapped.length` — a
+      // cross-host redirect to a JSON body just under the cap would then
+      // wrap, and the notice would push the first chunk over.
       if (offset === 0 && (notice + wrapped).length <= maxChars) {
         return paginate(notice + wrapped, offset, maxChars);
       }

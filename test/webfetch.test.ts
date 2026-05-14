@@ -2098,9 +2098,9 @@ describe("cross-host redirect notice (issue #133)", () => {
     const md = await fetchAsMarkdown({ url: "https://aka.ms/dotnet" });
     // First line is the marker; the body follows after a blank line.
     expect(md.split("\n")[0]).toBe(
-      "[REDIRECTED — input was https://aka.ms/..., final URL is https://dotnet.microsoft.com/en-us/download]",
+      "[REDIRECTED — input was https://aka.ms, final URL is https://dotnet.microsoft.com/en-us/download]",
     );
-    expect(md).toContain("MD:");
+    expect(md).toContain("Download .NET");
   });
 
   it("does not prepend a notice when no redirect occurred", async () => {
@@ -2147,8 +2147,27 @@ describe("cross-host redirect notice (issue #133)", () => {
 
     const md = await fetchAsMarkdown({ url: "https://example.com" });
     expect(md.split("\n")[0]).toBe(
-      "[REDIRECTED — input was https://example.com/..., final URL is https://www.example.com/]",
+      "[REDIRECTED — input was https://example.com, final URL is https://www.example.com/]",
     );
+  });
+
+  it("strips userinfo from the final URL before echoing (credential leak guard)", async () => {
+    // A redirect target containing credentials must not echo them into
+    // the markdown the model then logs. Host inequality still triggers
+    // the notice; the user:pass@ prefix is scrubbed.
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://user:s3cret@evil.example/path", 302))
+      .mockResolvedValueOnce(htmlOk("<h1>Hi</h1>"));
+    vi.stubGlobal("fetch", mock);
+
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    const first = md.split("\n")[0];
+    expect(first).toBe(
+      "[REDIRECTED — input was https://example.com, final URL is https://evil.example/path]",
+    );
+    expect(first).not.toContain("s3cret");
+    expect(first).not.toContain("user:");
   });
 
   it("does not prepend a notice for an HTTP→HTTPS upgrade on the same host", async () => {

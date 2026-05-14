@@ -184,21 +184,32 @@ function classifyMime(ct: string): BodyKind | "binary" {
   return "text";
 }
 
-function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const total = text.length;
-  return (
-    text.slice(0, max) +
-    `\n\n[TRUNCATED — fetched ${max} chars of ${total} total. Re-call with higher max_chars or different URL to read more.]`
-  );
-}
-
-// TEMPORARY stub — Task 2 replaces with real implementation.
+// Slice the extracted markdown for the LLM. Pagination via `offset` is the
+// only way to reach content past MAX_CHARS_HARD_CAP — see issue #132. The
+// footer is the sole signaling channel: when more remains, it names the
+// exact next offset; when the slice reaches end-of-document, no footer is
+// appended; when offset overshoots the document, a self-correcting marker
+// is returned in lieu of an error so the model can recover.
+//
+// Exported for unit tests and so callers building paginated workflows can
+// reason about the shape directly. Pre-condition: maxChars >= 1, offset >= 0
+// — fetchAsMarkdown enforces both before calling.
 export function paginate(text: string, offset: number, maxChars: number): string {
-  void text;
-  void offset;
-  void maxChars;
-  throw new Error("paginate not implemented");
+  const total = text.length;
+  if (offset >= total) {
+    // Past-end is reachable via legitimate "next chunk" requests near the
+    // tail; throwing would force the caller to add boundary-detection
+    // logic for a value we know unambiguously. A self-describing marker
+    // with the recovery hint is better UX than an exception.
+    return `[OFFSET ${offset} PAST END — document is ${total} chars total. Re-call with offset=0 or omit offset to read from the start.]`;
+  }
+  const end = Math.min(offset + maxChars, total);
+  const slice = text.slice(offset, end);
+  if (end >= total) return slice; // last chunk — no footer
+  return (
+    slice +
+    `\n\n[TRUNCATED — returned chars ${offset}..${end} of ${total} total. Re-call with offset=${end} to read the next chunk.]`
+  );
 }
 
 const MAX_REDIRECTS = 5;

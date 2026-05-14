@@ -241,16 +241,18 @@ export function paginate(text: string, offset: number, maxChars: number): string
   // Skip when the chunk reaches end-of-document (no next call to receive
   // the deferred low surrogate) or when the chunk is one char long
   // (snapping would empty the slice — the high half ships now and the
-  // low half ships at the next offset; runtime callers don't reach
-  // maxChars=1 in practice).
+  // low half ships at the next offset). Production callers can't reach
+  // maxChars=1: schema enforces `minimum: 2` and `fetchAsMarkdown`
+  // clamps direct callers to the same floor. The branch survives only
+  // for `paginate`'s exported test surface, which still accepts 1.
   //
   // The guard is intentionally one-sided (chunk *end* only). At the
   // chunk *start* the symmetric case — `offset` landing on a lone low
   // surrogate — can only happen if a previous call shipped a lone high
-  // surrogate (i.e. the maxChars=1 escape hatch above fired). Production
-  // callers don't reach maxChars=1, so the asymmetry is deliberate, not
-  // a missing case; adding a start-side snap would silently drop the low
-  // half and break the half-open [offset, end) tiling guarantee.
+  // surrogate (i.e. the maxChars=1 escape hatch above fired). Schema
+  // and runtime both forbid maxChars=1 in production, so the asymmetry
+  // is a true invariant; adding a start-side snap would silently drop
+  // the low half and break the half-open [offset, end) tiling guarantee.
   if (end < total && end - 1 > offset) {
     const last = text.charCodeAt(end - 1);
     if (last >= 0xd800 && last <= 0xdbff) end--;
@@ -623,7 +625,13 @@ async function maybeRetryAfter(
 
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   const url = validateUrl(input.url);
-  const maxChars = Math.min(Math.max(1, input.max_chars ?? MAX_CHARS_DEFAULT), MAX_CHARS_HARD_CAP);
+  // Runtime floor is 2, mirroring the schema's `minimum: 2`. Direct
+  // `fetchAsMarkdown` callers bypass schema validation, so the clamp here
+  // is what makes paginate's end-side surrogate-snap asymmetry a true
+  // invariant: at maxChars=1 the snap would empty the slice and the
+  // half-open tiling would desync. See `paginate` and the `max_chars`
+  // schema field for the full rationale.
+  const maxChars = Math.min(Math.max(2, input.max_chars ?? MAX_CHARS_DEFAULT), MAX_CHARS_HARD_CAP);
   // Defensive cap (issue #132): the extracted markdown can never exceed
   // MAX_RESPONSE_BYTES (5 MB). The cap compares JS string units against a
   // byte budget; this is a deliberately loose upper bound, not a tight
@@ -744,7 +752,16 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
       // marker in `paginate` reports honestly — that recovery path is
       // the intended fallback here, same as for any other mid-pagination
       // mutation.
-      if (wrapped.length <= maxChars) {
+      //
+      // Belt-and-braces: also gate on `offset === 0`. Without it, an
+      // agent that re-calls with offset>0 against a wrapped body that
+      // happens to fit in one chunk would receive a fenceless tail of
+      // JSON (`paginate` slices `wrapped[offset:]`, dropping the opening
+      // ```json fence). The shrink-case rationale above covers wrapping
+      // mismatches across calls, but a fresh re-call with non-zero
+      // offset is always wrong here — fall through to the unwrapped
+      // branch so every chunk past offset 0 is self-consistent raw JSON.
+      if (offset === 0 && wrapped.length <= maxChars) {
         return paginate(wrapped, offset, maxChars);
       }
       return paginate(pretty, offset, maxChars);
@@ -1009,6 +1026,14 @@ const webfetchSchema = Type.Object({
     Type.Number({
       description: `Truncate output at N chars (default ${MAX_CHARS_DEFAULT}, hard cap ${MAX_CHARS_HARD_CAP}).`,
       default: MAX_CHARS_DEFAULT,
+      // `minimum: 2` makes `paginate`'s end-side surrogate-snap
+      // asymmetry a true schema invariant rather than a "production
+      // callers don't reach maxChars=1" assumption: at maxChars=1 the
+      // snap would empty the slice, so `paginate` deliberately ships a
+      // lone high surrogate instead — the only path that can desync the
+      // half-open [offset, end) tiling. Schema rejects what runtime
+      // would otherwise have to special-case.
+      minimum: 2,
     }),
   ),
   offset: Type.Optional(

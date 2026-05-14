@@ -299,6 +299,34 @@ describe("fetchAsMarkdown", () => {
     ).rejects.toThrow(/exceeds the maximum addressable range/i);
   });
 
+  it("rejects offset === MAX_RESPONSE_BYTES at the boundary (issue #132)", async () => {
+    // Pins the `>=` (not `>`) check in fetchAsMarkdown: total length is
+    // capped at MAX_RESPONSE_BYTES, so offset === MAX_RESPONSE_BYTES is
+    // guaranteed past-end and gets rejected up front rather than reaching
+    // paginate's marker. Companion to the `MAX_RESPONSE_BYTES + 1` test
+    // above and the `MAX_RESPONSE_BYTES - 1` boundary below; together
+    // they prove the schema cap (`maximum: MAX_RESPONSE_BYTES - 1`) and
+    // runtime cap agree at the seam.
+    await expect(
+      fetchAsMarkdown({ url: "https://example.com", offset: MAX_RESPONSE_BYTES }),
+    ).rejects.toThrow(/exceeds the maximum addressable range/i);
+  });
+
+  it("accepts offset === MAX_RESPONSE_BYTES - 1 at the boundary (issue #132)", async () => {
+    // Mirror of the rejection boundary: the schema's `maximum:
+    // MAX_RESPONSE_BYTES - 1` is the largest legal offset, and runtime
+    // must accept it (no early reject) so schema and runtime agree.
+    // Body is well under that offset, so paginate returns the past-end
+    // marker — the assertion is only that we reach paginate at all,
+    // not that the offset hits content.
+    mockFetchOnce({ body: "<h1>tiny</h1>" });
+    const out = await fetchAsMarkdown({
+      url: "https://example.com",
+      offset: MAX_RESPONSE_BYTES - 1,
+    });
+    expect(out).toMatch(/PAST END/);
+  });
+
   it("offset past extracted-markdown length returns past-end marker, not error (issue #132)", async () => {
     // Body well under MAX_RESPONSE_BYTES so the cap above doesn't trip;
     // offset chosen larger than the markdown htmlToMarkdown will produce.
@@ -307,7 +335,7 @@ describe("fetchAsMarkdown", () => {
     expect(out).toMatch(/OFFSET 10000 PAST END/);
   });
 
-  it("paginates content past MAX_CHARS_HARD_CAP across sequential calls (issue #132)", async () => {
+  it("paginates content larger than max_chars across sequential calls (issue #132)", async () => {
     // Use the text/plain branch (verbatim body — same paginate() call site)
     // so the test isn't constrained by the htmlToMarkdown mock's 20-char cap.
     // No cache between calls (issue #132) — each fetch is mocked independently.
@@ -445,6 +473,15 @@ describe("fetchAsMarkdown", () => {
     expect(reconstructed.length).toBe(300_000);
     expect(reconstructed[199_999]).toBe("a");
     expect(reconstructed[200_000]).toBe("b");
+    // Symmetric mid-chunk positional asserts mirroring the equal-length
+    // desync test above (`reconstructed[250_000] === "b"`): pin one
+    // index inside chunk0 (bodyA territory) and one inside chunk1
+    // (bodyB territory) so a chunk-mix-up regression is caught from
+    // both sides, not just at the seam. Note: total length is exactly
+    // 300_000, so 250_000 is the mid-chunk1 position (chunk1 covers
+    // indices 200_000…299_999); 300_000 itself would be undefined.
+    expect(reconstructed[100_000]).toBe("a");
+    expect(reconstructed[250_000]).toBe("b");
   });
 
   it("rejects response > 5MB via content-length", async () => {

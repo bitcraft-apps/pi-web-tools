@@ -58,8 +58,7 @@ You don't call them directly — pi's agent calls them when it needs.
   - `time` (optional): `d` | `w` | `m` | `y` — restrict results to the past day/week/month/year. Maps to ddgr's `--time`. Default: no filter (all time). Use when the query is time-sensitive ("latest", "recent", "this week") — DuckDuckGo's default ranking otherwise surfaces years-old SEO content above recent results.
 - `webfetch`: default 50k chars output, hard cap 200k; 5 MB response cap; 30s timeout.
 - `webfetch` sends `Accept: text/markdown,text/html;q=0.9,…` first; sites that honor it (Cloudflare's "Markdown for Agents", GitHub docs, Anthropic docs, Stripe API docs, …) return pre-rendered markdown — typically 10–100× smaller.
-- `webfetch` cannot fetch: images, video, audio, localhost, 127/8, 169.254/16; PDFs unless optional `pdftotext` is installed.
-- `webfetch` cannot render JS-only SPAs (you'll get empty markdown).
+- `webfetch` cannot fetch: images, video, audio, localhost, 127/8, 169.254/16; PDFs unless optional `pdftotext` is installed (see [docs/pdf.md](docs/pdf.md)).
 - `webfetch` pagination: pass `offset` (default 0) to read past the 200k-char per-call cap; thread the `Y` from the `[TRUNCATED — returned chars [X, Y) of Z total. Re-call with offset=Y …]` footer back as the next `offset`. The range is half-open (`X` inclusive, `Y` exclusive) so passing `Y` resumes exactly where the previous chunk stopped, with no overlap or gap. **Stop paginating once the section the agent needs is in hand.**
 - On `429`/`503`, honors `Retry-After` (delta-seconds or HTTP-date) for **one** retry, capped at 10s. No backoff, no retry on other statuses.
 - Cross-host redirects are surfaced in-band via a `[REDIRECTED — input was https://INPUT_HOST, final URL is FINAL_URL]` line prepended to the markdown; userinfo (`user:pass@`) is stripped. Same-host redirects produce no notice.

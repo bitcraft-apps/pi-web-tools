@@ -1,4 +1,4 @@
-← [README](../README.md) · sibling: [Content extraction](extraction.md)
+← [README](../README.md) · see also: [Content extraction](extraction.md)
 
 # PDF support (optional)
 

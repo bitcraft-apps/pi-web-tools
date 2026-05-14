@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.2.0...v1.3.0) (2026-05-14)
+
+
+### Features
+
+* **webfetch:** detect JS-only shell pages and surface a clear error ([#137](https://github.com/bitcraft-apps/pi-web-tools/issues/137)) ([70bd3b1](https://github.com/bitcraft-apps/pi-web-tools/commit/70bd3b198c295e02a060c5c1a0a2752f984e43f7))
+* **webfetch:** follow &lt;link rel=alternate&gt; in &lt;head&gt; when extraction is thin ([#134](https://github.com/bitcraft-apps/pi-web-tools/issues/134)) ([e97b2e4](https://github.com/bitcraft-apps/pi-web-tools/commit/e97b2e44554020181ff39e818cfc22dcb6fe794a))
+* **webfetch:** paginate output via offset for content past MAX_CHARS_HARD_CAP ([#138](https://github.com/bitcraft-apps/pi-web-tools/issues/138)) ([d2d506f](https://github.com/bitcraft-apps/pi-web-tools/commit/d2d506f0194507b7c888812f594ea57dad47f297))
+* **webfetch:** prefer text/markdown via Accept negotiation ([#136](https://github.com/bitcraft-apps/pi-web-tools/issues/136)) ([177e829](https://github.com/bitcraft-apps/pi-web-tools/commit/177e829539b460f0aab01005742a75eeb7a91e3d))
+* **webfetch:** strip base64 data: URI payloads from converter output ([#130](https://github.com/bitcraft-apps/pi-web-tools/issues/130)) ([55ae1ab](https://github.com/bitcraft-apps/pi-web-tools/commit/55ae1abf0c93dfba4b9ba7fb869bd5cded26f610))
+* **webfetch:** surface cross-host redirects to the model ([#139](https://github.com/bitcraft-apps/pi-web-tools/issues/139)) ([c907d34](https://github.com/bitcraft-apps/pi-web-tools/commit/c907d34d460a129a9fb804db18a58552b7c902e4))
+
 ## [1.2.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.1.0...v1.2.0) (2026-05-11)
 
 

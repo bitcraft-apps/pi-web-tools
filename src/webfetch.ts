@@ -213,8 +213,14 @@ export function paginate(text: string, offset: number, maxChars: number): string
     // Past-end is reachable via legitimate "next chunk" requests near the
     // tail; throwing would force the caller to add boundary-detection
     // logic for a value we know unambiguously. A self-describing marker
-    // with the recovery hint is better UX than an exception.
-    return `[OFFSET ${offset} PAST END — document is ${total} chars total. Re-call with offset=0 or omit offset to read from the start.]`;
+    // is better UX than an exception.
+    //
+    // No "retry from offset=0" hint: an agent only reaches past-end when
+    // (a) the document shrank between calls (race; restart hits the same
+    // race) or (b) its own offset arithmetic is off (restart wastes a
+    // fetch). The honest signal is "the prior chunk was already the
+    // tail" — the caller decides whether to re-fetch from 0 or stop.
+    return `[OFFSET ${offset} PAST END — document is ${total} chars total; the previous chunk was the tail. If the document was expected to be longer, it shrank between calls (no cache; each fetch re-runs the pipeline).]`;
   }
   const end = Math.min(offset + maxChars, total);
   // Slicing on UTF-16 code units can split a surrogate pair at the chunk
@@ -233,6 +239,13 @@ export function paginate(text: string, offset: number, maxChars: number): string
     `\n\n[TRUNCATED — returned chars [${offset}, ${end}) of ${total} total. Re-call with offset=${end} to read the next chunk.]`
   );
 }
+
+// Single source of truth for the pagination footer literal. Exported so
+// tests can strip it for reconstruction checks without re-encoding the
+// wording (a footer reword would otherwise silently break those tests by
+// leaving the footer in the reconstructed string).
+export const PAGINATION_FOOTER_RE =
+  /\n\n\[TRUNCATED — returned chars \[\d+, \d+\) of \d+ total\. Re-call with offset=\d+ to read the next chunk\.\]$/;
 
 const MAX_REDIRECTS = 5;
 
@@ -566,7 +579,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   }
   if (offset > MAX_RESPONSE_BYTES) {
     throw new Error(
-      `offset ${offset} exceeds maximum (${MAX_RESPONSE_BYTES}); the extracted markdown can never be longer than the network cap`,
+      `offset ${offset} exceeds the maximum addressable range (${MAX_RESPONSE_BYTES} = MAX_RESPONSE_BYTES); documents that large are not supported`,
     );
   }
 
@@ -646,6 +659,13 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   if (kind === "json") {
     try {
       const pretty = JSON.stringify(JSON.parse(body), null, 2);
+      // Known limitation: the ```json … ``` fences are part of the paginated
+      // string, so any chunk past the first slices into the body without an
+      // opening fence and without a trailing close. JSON responses are
+      // overwhelmingly small enough to fit in one chunk; the fix (re-emit
+      // fences per chunk) would break the `offset == footer Y` arithmetic
+      // contract by making the chunk prefix variable-length. Documented in
+      // README under "Limits and behavior".
       return paginate("```json\n" + pretty + "\n```", offset, maxChars);
     } catch {
       return paginate(body, offset, maxChars);
@@ -1141,11 +1161,14 @@ export const webfetchTool = defineTool<typeof webfetchSchema, WebfetchToolDetail
     "Fetch a URL and return its main text content as markdown. HTML is converted via pandoc or w3m. If `trafilatura` or `rdrview` is on $PATH, runs a Reader-View-style extraction pre-pass to strip page chrome (nav/sidebar/footer), typically shrinking output 5–20× on chrome-heavy pages. Falls back transparently to the full page if no extractor is installed or extraction looks wrong. Use after `websearch` to read full content of a result, or directly when user gives you a URL. For documents larger than `max_chars`, re-call with the `offset` value reported in the truncation footer to read the next chunk (no cache — each paginated call re-fetches). Cannot fetch binary content (PDF, images). Cannot reach localhost or RFC1918 link-local addresses.",
   parameters: webfetchSchema,
   async execute(_id, params, _signal, _onUpdate, _ctx) {
-    // Forward the validated params object whole rather than re-listing
-    // every field — keeps execute() in sync if webfetchSchema grows.
-    // Safe because webfetchSchema's shape is a structural subset of
-    // FetchInput.
-    const md = await fetchAsMarkdown(params as FetchInput);
+    // Structural pass-through (not a cast): listing each field makes the
+    // compiler catch schema/FetchInput drift here instead of relying on an
+    // assertion to silently paper over a rename.
+    const md = await fetchAsMarkdown({
+      url: params.url,
+      max_chars: params.max_chars,
+      offset: params.offset,
+    });
     return {
       content: [{ type: "text", text: md }],
       details: { url: params.url, chars: md.length, bytes: Buffer.byteLength(md, "utf-8") },

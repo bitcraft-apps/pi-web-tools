@@ -7,6 +7,7 @@ vi.mock("node:child_process", () => ({
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { Readable, Writable } from "node:stream";
+import { isWhichSpawn, whichSpawnTarget } from "./_helpers/spawn.js";
 
 function fakeChild(stdoutText: string, exitCode = 0) {
   const ee: any = new EventEmitter();
@@ -31,7 +32,7 @@ beforeEach(() => {
 describe("htmlToMarkdown", () => {
   it("converts HTML using pandoc when available", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pandoc") return fakeChild("/usr/bin/pandoc\n", 0);
+      if (isWhichSpawn(cmd, args, "pandoc")) return fakeChild("/usr/bin/pandoc\n", 0);
       if (cmd === "pandoc") return fakeChild("# Hello\n", 0);
       return fakeChild("", 1);
     });
@@ -41,8 +42,8 @@ describe("htmlToMarkdown", () => {
 
   it("falls back to w3m if pandoc missing", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pandoc") return fakeChild("", 1);
-      if (cmd === "which" && args[0] === "w3m") return fakeChild("/usr/bin/w3m\n", 0);
+      if (isWhichSpawn(cmd, args, "pandoc")) return fakeChild("", 1);
+      if (isWhichSpawn(cmd, args, "w3m")) return fakeChild("/usr/bin/w3m\n", 0);
       if (cmd === "w3m") return fakeChild("Hello\n", 0);
       return fakeChild("", 1);
     });
@@ -57,21 +58,23 @@ describe("htmlToMarkdown", () => {
 
   it("memoizes converter detection across calls (which spawned only once)", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pandoc") return fakeChild("/usr/bin/pandoc\n", 0);
+      if (isWhichSpawn(cmd, args, "pandoc")) return fakeChild("/usr/bin/pandoc\n", 0);
       if (cmd === "pandoc") return fakeChild("# Hi\n", 0);
       return fakeChild("", 1);
     });
     await htmlToMarkdown("<h1>a</h1>");
     await htmlToMarkdown("<h1>b</h1>");
     await htmlToMarkdown("<h1>c</h1>");
-    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "which");
-    expect(whichCalls).toHaveLength(1);
-    expect(whichCalls[0]![1][0]).toBe("pandoc");
+    const probes = vi
+      .mocked(spawn)
+      .mock.calls.map(whichSpawnTarget)
+      .filter((t): t is string => t !== undefined);
+    expect(probes).toEqual(["pandoc"]);
   });
 
   it("single-flights concurrent first calls (which spawned only once under parallel load)", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pandoc") return fakeChild("/usr/bin/pandoc\n", 0);
+      if (isWhichSpawn(cmd, args, "pandoc")) return fakeChild("/usr/bin/pandoc\n", 0);
       if (cmd === "pandoc") return fakeChild("# Hi\n", 0);
       return fakeChild("", 1);
     });
@@ -80,15 +83,17 @@ describe("htmlToMarkdown", () => {
       htmlToMarkdown("<h1>b</h1>"),
       htmlToMarkdown("<h1>c</h1>"),
     ]);
-    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "which");
-    expect(whichCalls).toHaveLength(1);
-    expect(whichCalls[0]![1][0]).toBe("pandoc");
+    const probes = vi
+      .mocked(spawn)
+      .mock.calls.map(whichSpawnTarget)
+      .filter((t): t is string => t !== undefined);
+    expect(probes).toEqual(["pandoc"]);
   });
 
   it("strips base64 data: URI payloads from pandoc output (issue #127)", async () => {
     const pandocOut = "![](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA)\n";
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pandoc") return fakeChild("/usr/bin/pandoc\n", 0);
+      if (isWhichSpawn(cmd, args, "pandoc")) return fakeChild("/usr/bin/pandoc\n", 0);
       if (cmd === "pandoc") return fakeChild(pandocOut, 0);
       return fakeChild("", 1);
     });
@@ -101,8 +106,8 @@ describe("htmlToMarkdown", () => {
   it("strips base64 data: URI payloads from w3m output too (issue #127)", async () => {
     const w3mOut = "Image: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA\n";
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pandoc") return fakeChild("", 1);
-      if (cmd === "which" && args[0] === "w3m") return fakeChild("/usr/bin/w3m\n", 0);
+      if (isWhichSpawn(cmd, args, "pandoc")) return fakeChild("", 1);
+      if (isWhichSpawn(cmd, args, "w3m")) return fakeChild("/usr/bin/w3m\n", 0);
       if (cmd === "w3m") return fakeChild(w3mOut, 0);
       return fakeChild("", 1);
     });

@@ -7,6 +7,7 @@ vi.mock("node:child_process", () => ({
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { Readable, Writable } from "node:stream";
+import { isWhichSpawn, whichSpawnTarget } from "./_helpers/spawn.js";
 
 // Mirrors test/extract.test.ts fakeChild — same scheduling caveats apply
 // (close emits after stdout drains, resume forces flow even with no data
@@ -45,7 +46,7 @@ beforeEach(() => {
 describe("detectPdftotext", () => {
   it("returns true when pdftotext is on $PATH", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pdftotext") return fakeChild("/usr/bin/pdftotext\n", 0);
+      if (isWhichSpawn(cmd, args, "pdftotext")) return fakeChild("/usr/bin/pdftotext\n", 0);
       return fakeChild("", 1);
     });
     expect(await detectPdftotext()).toBe(true);
@@ -61,14 +62,14 @@ describe("detectPdftotext", () => {
     await detectPdftotext();
     await detectPdftotext();
     await detectPdftotext();
-    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "which");
+    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => whichSpawnTarget(c) !== undefined);
     expect(whichCalls).toHaveLength(1);
   });
 
   it("single-flights concurrent first calls", async () => {
     vi.mocked(spawn).mockImplementation(() => fakeChild("/usr/bin/pdftotext\n", 0));
     await Promise.all([detectPdftotext(), detectPdftotext(), detectPdftotext()]);
-    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "which");
+    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => whichSpawnTarget(c) !== undefined);
     expect(whichCalls).toHaveLength(1);
   });
 });
@@ -88,7 +89,7 @@ function fakePdf(): ArrayBuffer {
 describe("pdfToText", () => {
   it("invokes pdftotext with -layout -enc UTF-8 - - and returns its stdout", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pdftotext") return fakeChild("/x\n", 0);
+      if (isWhichSpawn(cmd, args, "pdftotext")) return fakeChild("/x\n", 0);
       if (cmd === "pdftotext") return fakeChild("Hello, PDF.", 0);
       return fakeChild("", 1);
     });
@@ -103,7 +104,7 @@ describe("pdfToText", () => {
 
   it("returns null (does not throw) when pdftotext exits non-zero", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pdftotext") return fakeChild("/x\n", 0);
+      if (isWhichSpawn(cmd, args, "pdftotext")) return fakeChild("/x\n", 0);
       if (cmd === "pdftotext") return fakeChild("", 2, "Syntax Error: Couldn't read xref table");
       return fakeChild("", 1);
     });
@@ -125,7 +126,7 @@ describe("pdfToText", () => {
 
   it("does not warn when pdftotext is present", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pdftotext") return fakeChild("/x\n", 0);
+      if (isWhichSpawn(cmd, args, "pdftotext")) return fakeChild("/x\n", 0);
       if (cmd === "pdftotext") return fakeChild("ok", 0);
       return fakeChild("", 1);
     });
@@ -135,7 +136,7 @@ describe("pdfToText", () => {
 
   it("emits a one-shot stderr warning on first pdftotext failure", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pdftotext") return fakeChild("/x\n", 0);
+      if (isWhichSpawn(cmd, args, "pdftotext")) return fakeChild("/x\n", 0);
       if (cmd === "pdftotext") return fakeChild("", 2, "boom");
       return fakeChild("", 1);
     });
@@ -176,7 +177,7 @@ describe("pdfToText", () => {
       return ee;
     }
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pdftotext") return fakeChild("/x\n", 0);
+      if (isWhichSpawn(cmd, args, "pdftotext")) return fakeChild("/x\n", 0);
       if (cmd === "pdftotext") return overflowChild();
       return fakeChild("", 1);
     });
@@ -210,7 +211,7 @@ describe("pdfToText", () => {
         return ee;
       }
       vi.mocked(spawn).mockImplementation((cmd, args) => {
-        if (cmd === "which" && args[0] === "pdftotext") return fakeChild("/x\n", 0);
+        if (isWhichSpawn(cmd, args, "pdftotext")) return fakeChild("/x\n", 0);
         if (cmd === "pdftotext") return hangingChild();
         return fakeChild("", 1);
       });

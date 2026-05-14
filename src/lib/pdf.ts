@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { commandExists } from "./which.ts";
 
 // pdftotext on a moderately-sized PDF (academic paper, RFC) finishes in tens
 // of ms; on a 5 MB scanned/OCR-heavy PDF it can legitimately spike to several
@@ -20,24 +21,6 @@ const PDFTOTEXT_MAX_BYTES = 50 * 1024 * 1024;
 let cachedDetection: Promise<boolean> | undefined;
 let warnedNoPdftotext = false;
 let warnedPdftotextFailure = false;
-
-async function commandExists(cmd: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    let child;
-    try {
-      // `which` isn't POSIX (`command -v` is). Same caveat as extract.ts:
-      // may be missing on slim Alpine / distroless / busybox setups; in
-      // those cases this resolves false and we fall through to the
-      // no-pdftotext warning path. If we ever add Windows support, this
-      // is the one place that breaks.
-      child = spawn("which", [cmd], { stdio: ["ignore", "pipe", "pipe"] });
-    } catch {
-      return resolve(false);
-    }
-    child.on("error", () => resolve(false));
-    child.on("close", (code) => resolve(code === 0));
-  });
-}
 
 export async function detectPdftotext(): Promise<boolean> {
   if (cachedDetection !== undefined) return cachedDetection;

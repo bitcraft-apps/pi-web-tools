@@ -237,6 +237,80 @@ describe("fetchAsMarkdown", () => {
     expect(md).toMatch(/\[TRUNCATED — returned chars 0\.\.5 of \d+ total\. Re-call with offset=5/);
   });
 
+  it("rejects negative offset (issue #132)", async () => {
+    // No fetch mock needed — validation runs before the network call.
+    await expect(
+      fetchAsMarkdown({ url: "https://example.com", offset: -1 }),
+    ).rejects.toThrow(/invalid offset/i);
+  });
+
+  it("rejects non-integer offset (issue #132)", async () => {
+    await expect(
+      fetchAsMarkdown({ url: "https://example.com", offset: 1.5 }),
+    ).rejects.toThrow(/invalid offset/i);
+  });
+
+  it("rejects offset > MAX_RESPONSE_BYTES (issue #132)", async () => {
+    await expect(
+      fetchAsMarkdown({ url: "https://example.com", offset: MAX_RESPONSE_BYTES + 1 }),
+    ).rejects.toThrow(/exceeds maximum/i);
+  });
+
+  it("offset past extracted-markdown length returns past-end marker, not error (issue #132)", async () => {
+    // Body well under MAX_RESPONSE_BYTES so the cap above doesn't trip;
+    // offset chosen larger than the markdown htmlToMarkdown will produce.
+    mockFetchOnce({ body: "<h1>tiny</h1>" });
+    const out = await fetchAsMarkdown({ url: "https://example.com", offset: 10_000 });
+    expect(out).toMatch(/OFFSET 10000 PAST END/);
+  });
+
+  it("paginates content past MAX_CHARS_HARD_CAP across sequential calls (issue #132)", async () => {
+    // Use the text/plain branch (verbatim body — same paginate() call site)
+    // so the test isn't constrained by the htmlToMarkdown mock's 20-char cap.
+    // No cache between calls (issue #132) — each fetch is mocked independently.
+    const big = "y".repeat(450_000);
+    mockFetchOnce({ body: big, headers: { "content-type": "text/plain" } });
+    const part1 = await fetchAsMarkdown({ url: "https://example.com/big.txt" });
+
+    mockFetchOnce({ body: big, headers: { "content-type": "text/plain" } });
+    const chunk0 = await fetchAsMarkdown({
+      url: "https://example.com/big.txt",
+      max_chars: 200_000,
+      offset: 0,
+    });
+    mockFetchOnce({ body: big, headers: { "content-type": "text/plain" } });
+    const chunk1 = await fetchAsMarkdown({
+      url: "https://example.com/big.txt",
+      max_chars: 200_000,
+      offset: 200_000,
+    });
+    mockFetchOnce({ body: big, headers: { "content-type": "text/plain" } });
+    const chunk2 = await fetchAsMarkdown({
+      url: "https://example.com/big.txt",
+      max_chars: 200_000,
+      offset: 400_000,
+    });
+
+    const stripFooter = (s: string): string =>
+      s.replace(
+        /\n\n\[TRUNCATED — returned chars \d+\.\.\d+ of \d+ total\. Re-call with offset=\d+ to read the next chunk\.\]$/,
+        "",
+      );
+    const reconstructed = stripFooter(chunk0) + stripFooter(chunk1) + stripFooter(chunk2);
+    expect(reconstructed.length).toBe(450_000);
+    expect(reconstructed).toBe(big);
+
+    expect(chunk0).toMatch(/offset=200000/);
+    expect(chunk1).toMatch(/offset=400000/);
+    // Last chunk is exactly the tail (50K of body), no footer.
+    expect(chunk2).not.toMatch(/TRUNCATED/);
+    expect(chunk2.length).toBe(50_000);
+
+    // Sanity: default-max-chars call truncates — proves pagination is needed.
+    expect(part1.length).toBeLessThan(big.length);
+    expect(part1).toMatch(/TRUNCATED/);
+  });
+
   it("rejects response > 5MB via content-length", async () => {
     mockFetchOnce({
       body: "x",

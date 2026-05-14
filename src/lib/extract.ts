@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { commandExists } from "./which.ts";
 
 // Same backstop as html2md's CONVERT_TIMEOUT_MS. Note: webfetch now chains
 // extractor → pandoc/w3m, so worst-case subprocess time per HTML fetch is ~20s.
@@ -21,23 +22,6 @@ const EXTRACT_MAX_BYTES = 50 * 1024 * 1024;
 let cachedDetection: Promise<Extractor | null> | undefined;
 let warnedNoExtractor = false;
 let warnedExtractorFailure = false;
-
-async function commandExists(cmd: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    let child;
-    try {
-      // `which` isn't POSIX (`command -v` is). May be missing on slim Alpine /
-      // distroless / busybox setups; in those cases this resolves false and we
-      // fall through to the no-extractor warning path. If we ever add Windows
-      // support, this is the one place that breaks.
-      child = spawn("which", [cmd], { stdio: ["ignore", "pipe", "pipe"] });
-    } catch {
-      return resolve(false);
-    }
-    child.on("error", () => resolve(false));
-    child.on("close", (code) => resolve(code === 0));
-  });
-}
 
 export async function detectExtractor(): Promise<Extractor | null> {
   if (cachedDetection !== undefined) return cachedDetection;

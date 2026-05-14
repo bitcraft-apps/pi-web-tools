@@ -1,19 +1,7 @@
 import { spawn } from "node:child_process";
+import { commandExists } from "./which.ts";
 
 const CONVERT_TIMEOUT_MS = 10_000;
-
-async function commandExists(cmd: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    let child;
-    try {
-      child = spawn("which", [cmd], { stdio: ["ignore", "pipe", "pipe"] });
-    } catch {
-      return resolve(false);
-    }
-    child.on("error", () => resolve(false));
-    child.on("close", (code) => resolve(code === 0));
-  });
-}
 
 export type Converter = "pandoc" | "w3m";
 

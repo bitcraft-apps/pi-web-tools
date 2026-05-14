@@ -9,4 +9,11 @@ describe("commandExists", () => {
   it("resolves false for a command that does not exist", async () => {
     expect(await commandExists("definitely-not-a-cmd-xyz")).toBe(false);
   });
+
+  it("does not interpret shell metacharacters in the command name", async () => {
+    // If `cmd` were interpolated into the shell script, this would run
+    // `command -v node` and resolve true. Passed as a positional arg, it's
+    // looked up literally as a (nonexistent) binary named `node; echo hi`.
+    expect(await commandExists("node; echo hi")).toBe(false);
+  });
 });

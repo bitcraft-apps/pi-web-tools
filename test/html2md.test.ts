@@ -31,7 +31,7 @@ beforeEach(() => {
 describe("htmlToMarkdown", () => {
   it("converts HTML using pandoc when available", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pandoc") return fakeChild("/usr/bin/pandoc\n", 0);
+      if (cmd === "sh" && args[3] === "pandoc") return fakeChild("/usr/bin/pandoc\n", 0);
       if (cmd === "pandoc") return fakeChild("# Hello\n", 0);
       return fakeChild("", 1);
     });
@@ -41,8 +41,8 @@ describe("htmlToMarkdown", () => {
 
   it("falls back to w3m if pandoc missing", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pandoc") return fakeChild("", 1);
-      if (cmd === "which" && args[0] === "w3m") return fakeChild("/usr/bin/w3m\n", 0);
+      if (cmd === "sh" && args[3] === "pandoc") return fakeChild("", 1);
+      if (cmd === "sh" && args[3] === "w3m") return fakeChild("/usr/bin/w3m\n", 0);
       if (cmd === "w3m") return fakeChild("Hello\n", 0);
       return fakeChild("", 1);
     });
@@ -57,21 +57,21 @@ describe("htmlToMarkdown", () => {
 
   it("memoizes converter detection across calls (which spawned only once)", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pandoc") return fakeChild("/usr/bin/pandoc\n", 0);
+      if (cmd === "sh" && args[3] === "pandoc") return fakeChild("/usr/bin/pandoc\n", 0);
       if (cmd === "pandoc") return fakeChild("# Hi\n", 0);
       return fakeChild("", 1);
     });
     await htmlToMarkdown("<h1>a</h1>");
     await htmlToMarkdown("<h1>b</h1>");
     await htmlToMarkdown("<h1>c</h1>");
-    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "which");
+    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "sh" && c[1]?.[0] === "-c");
     expect(whichCalls).toHaveLength(1);
-    expect(whichCalls[0]![1][0]).toBe("pandoc");
+    expect(whichCalls[0]![1]![3]).toBe("pandoc");
   });
 
   it("single-flights concurrent first calls (which spawned only once under parallel load)", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pandoc") return fakeChild("/usr/bin/pandoc\n", 0);
+      if (cmd === "sh" && args[3] === "pandoc") return fakeChild("/usr/bin/pandoc\n", 0);
       if (cmd === "pandoc") return fakeChild("# Hi\n", 0);
       return fakeChild("", 1);
     });
@@ -80,15 +80,15 @@ describe("htmlToMarkdown", () => {
       htmlToMarkdown("<h1>b</h1>"),
       htmlToMarkdown("<h1>c</h1>"),
     ]);
-    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "which");
+    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "sh" && c[1]?.[0] === "-c");
     expect(whichCalls).toHaveLength(1);
-    expect(whichCalls[0]![1][0]).toBe("pandoc");
+    expect(whichCalls[0]![1]![3]).toBe("pandoc");
   });
 
   it("strips base64 data: URI payloads from pandoc output (issue #127)", async () => {
     const pandocOut = "![](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA)\n";
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pandoc") return fakeChild("/usr/bin/pandoc\n", 0);
+      if (cmd === "sh" && args[3] === "pandoc") return fakeChild("/usr/bin/pandoc\n", 0);
       if (cmd === "pandoc") return fakeChild(pandocOut, 0);
       return fakeChild("", 1);
     });
@@ -101,8 +101,8 @@ describe("htmlToMarkdown", () => {
   it("strips base64 data: URI payloads from w3m output too (issue #127)", async () => {
     const w3mOut = "Image: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA\n";
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "pandoc") return fakeChild("", 1);
-      if (cmd === "which" && args[0] === "w3m") return fakeChild("/usr/bin/w3m\n", 0);
+      if (cmd === "sh" && args[3] === "pandoc") return fakeChild("", 1);
+      if (cmd === "sh" && args[3] === "w3m") return fakeChild("/usr/bin/w3m\n", 0);
       if (cmd === "w3m") return fakeChild(w3mOut, 0);
       return fakeChild("", 1);
     });

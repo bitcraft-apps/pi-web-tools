@@ -68,21 +68,21 @@ beforeEach(() => {
 describe("detectExtractor", () => {
   it("prefers trafilatura when both are present", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "trafilatura")
+      if (cmd === "sh" && args[3] === "trafilatura")
         return fakeChild("/usr/bin/trafilatura\n", 0);
-      if (cmd === "which" && args[0] === "rdrview") return fakeChild("/usr/bin/rdrview\n", 0);
+      if (cmd === "sh" && args[3] === "rdrview") return fakeChild("/usr/bin/rdrview\n", 0);
       return fakeChild("", 1);
     });
     expect(await detectExtractor()).toBe("trafilatura");
     // rdrview should not have been probed (short-circuit on first hit)
-    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "which");
-    expect(whichCalls.map((c) => c[1][0])).toEqual(["trafilatura"]);
+    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "sh" && c[1]?.[0] === "-c");
+    expect(whichCalls.map((c) => c[1]![3])).toEqual(["trafilatura"]);
   });
 
   it("falls back to rdrview when trafilatura is missing", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "trafilatura") return fakeChild("", 1);
-      if (cmd === "which" && args[0] === "rdrview") return fakeChild("/usr/bin/rdrview\n", 0);
+      if (cmd === "sh" && args[3] === "trafilatura") return fakeChild("", 1);
+      if (cmd === "sh" && args[3] === "rdrview") return fakeChild("/usr/bin/rdrview\n", 0);
       return fakeChild("", 1);
     });
     expect(await detectExtractor()).toBe("rdrview");
@@ -95,25 +95,25 @@ describe("detectExtractor", () => {
 
   it("memoizes detection across calls (which probed at most once per binary)", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "trafilatura")
+      if (cmd === "sh" && args[3] === "trafilatura")
         return fakeChild("/usr/bin/trafilatura\n", 0);
       return fakeChild("", 1);
     });
     await detectExtractor();
     await detectExtractor();
     await detectExtractor();
-    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "which");
+    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "sh" && c[1]?.[0] === "-c");
     expect(whichCalls).toHaveLength(1);
   });
 
   it("single-flights concurrent first calls", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "trafilatura")
+      if (cmd === "sh" && args[3] === "trafilatura")
         return fakeChild("/usr/bin/trafilatura\n", 0);
       return fakeChild("", 1);
     });
     await Promise.all([detectExtractor(), detectExtractor(), detectExtractor()]);
-    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "which");
+    const whichCalls = vi.mocked(spawn).mock.calls.filter((c) => c[0] === "sh" && c[1]?.[0] === "-c");
     expect(whichCalls).toHaveLength(1);
   });
 });
@@ -121,7 +121,7 @@ describe("detectExtractor", () => {
 describe("extractContent", () => {
   it("invokes trafilatura with --html --no-comments and returns its stdout", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
+      if (cmd === "sh" && args[3] === "trafilatura") return fakeChild("/x\n", 0);
       if (cmd === "trafilatura") return fakeChild("<article>clean</article>", 0);
       return fakeChild("", 1);
     });
@@ -134,8 +134,8 @@ describe("extractContent", () => {
 
   it("invokes rdrview with -H -u <url> and platform-conditional --disable-sandbox", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "trafilatura") return fakeChild("", 1);
-      if (cmd === "which" && args[0] === "rdrview") return fakeChild("/x\n", 0);
+      if (cmd === "sh" && args[3] === "trafilatura") return fakeChild("", 1);
+      if (cmd === "sh" && args[3] === "rdrview") return fakeChild("/x\n", 0);
       if (cmd === "rdrview") return fakeChild("<article>r</article>", 0);
       return fakeChild("", 1);
     });
@@ -153,7 +153,7 @@ describe("extractContent", () => {
 
   it("returns null (does not throw) when extractor exits non-zero", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
+      if (cmd === "sh" && args[3] === "trafilatura") return fakeChild("/x\n", 0);
       if (cmd === "trafilatura") return fakeChild("", 2, "boom");
       return fakeChild("", 1);
     });
@@ -171,7 +171,7 @@ describe("extractContent", () => {
 
   it("does not warn when an extractor is present", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
+      if (cmd === "sh" && args[3] === "trafilatura") return fakeChild("/x\n", 0);
       if (cmd === "trafilatura") return fakeChild("<p>ok</p>", 0);
       return fakeChild("", 1);
     });
@@ -181,7 +181,7 @@ describe("extractContent", () => {
 
   it("survives extractor that closes before stdin.end() (EPIPE on write)", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
+      if (cmd === "sh" && args[3] === "trafilatura") return fakeChild("/x\n", 0);
       if (cmd === "trafilatura") return fakeChildEpipeOnStdin(2);
       return fakeChild("", 1);
     });
@@ -194,7 +194,7 @@ describe("extractContent", () => {
 
   it("emits a one-shot stderr warning on first extractor failure", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (cmd === "which" && args[0] === "trafilatura") return fakeChild("/x\n", 0);
+      if (cmd === "sh" && args[3] === "trafilatura") return fakeChild("/x\n", 0);
       if (cmd === "trafilatura") return fakeChild("", 2, "boom");
       return fakeChild("", 1);
     });

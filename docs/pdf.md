@@ -1,3 +1,5 @@
+← [README](../README.md) · [Content extraction](extraction.md)
+
 # PDF support (optional)
 
 If [`pdftotext`](https://poppler.freedesktop.org/) (poppler) is on `$PATH`, `webfetch` will accept `application/pdf` responses and return the extracted plain text. Useful for academic papers, RFCs served as PDF, datasheets, vendor manuals, government docs — the things you'd otherwise have to download and paste excerpts from.

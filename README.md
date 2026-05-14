@@ -14,11 +14,7 @@ DuckDuckGo search via [`ddgr`](https://github.com/jarun/ddgr). Returns up to 25 
 
 <img src=".github/webfetch.png" alt="webfetch screenshot: rendered markdown of the Unix philosophy Wikipedia article" width="720">
 
-`fetch` + optional content-extraction pre-pass + HTML→markdown via `pandoc` (preferred) or `w3m` (fallback). Auto-handles Cloudflare challenges via UA hack. Blocks SSRF (localhost/RFC1918).
-
-**Extraction (optional):** install a Reader-View extractor (`pipx install trafilatura`) and `webfetch` runs it before markdown conversion, typically shrinking chrome-heavy pages 5–20×. See [docs/extraction.md](docs/extraction.md).
-
-**PDF (optional):** install [`pdftotext`](https://poppler.freedesktop.org/) (`brew install poppler`) and `webfetch` will accept `application/pdf` responses and return extracted text. See [docs/pdf.md](docs/pdf.md).
+`fetch` + optional content-extraction pre-pass + HTML→markdown via `pandoc` (preferred) or `w3m` (fallback). Auto-handles Cloudflare challenges via UA hack. Blocks SSRF (localhost/RFC1918). Optional add-ons: a Reader-View extractor for chrome-heavy pages ([docs/extraction.md](docs/extraction.md)) and `pdftotext` for PDFs ([docs/pdf.md](docs/pdf.md)).
 
 ## Install
 
@@ -26,6 +22,10 @@ DuckDuckGo search via [`ddgr`](https://github.com/jarun/ddgr). Returns up to 25 
 # 1. System deps (one-time)
 brew install ddgr pandoc        # macOS
 # or: pip install ddgr; apt install pandoc w3m
+
+# Optional add-ons (recommended):
+#   pipx install trafilatura     # Reader-View extraction — see docs/extraction.md
+#   brew install poppler         # PDF support — see docs/pdf.md
 
 # 2. Extension (from npm)
 pi install npm:@bitcraft-apps/pi-web-tools
@@ -57,10 +57,10 @@ You don't call them directly — pi's agent calls them when it needs.
   - `safesearch` (optional): `off` | `moderate` | `strict`. Default `moderate`. `off` passes `--unsafe` to ddgr. ddgr does not distinguish moderate vs strict — both use its default safe-search behavior (see [ddgr.1 manpage](https://github.com/jarun/ddgr/blob/master/ddgr.1); only `--unsafe` is exposed).
   - `time` (optional): `d` | `w` | `m` | `y` — restrict results to the past day/week/month/year. Maps to ddgr's `--time`. Default: no filter (all time). Use when the query is time-sensitive ("latest", "recent", "this week") — DuckDuckGo's default ranking otherwise surfaces years-old SEO content above recent results.
 - `webfetch`: default 50k chars output, hard cap 200k; 5 MB response cap; 30s timeout.
-- `webfetch` sends `Accept: text/markdown,text/html;q=0.9,…` first; sites that honor it (Cloudflare's "Markdown for Agents", GitHub docs, Anthropic docs, Stripe API docs, …) return pre-rendered markdown — typically 10–100× smaller. Rationale and full preference list in [`src/lib/headers.ts`](src/lib/headers.ts).
+- `webfetch` sends `Accept: text/markdown,text/html;q=0.9,…` first; sites that honor it (Cloudflare's "Markdown for Agents", GitHub docs, Anthropic docs, Stripe API docs, …) return pre-rendered markdown — typically 10–100× smaller. The full preference list and rationale live alongside the header construction in source.
 - `webfetch` cannot fetch: images, video, audio, localhost, 127/8, 169.254/16; PDFs unless optional `pdftotext` is installed (see [docs/pdf.md](docs/pdf.md)).
 - `webfetch` cannot render JS-only SPAs (you'll get empty markdown).
-- `webfetch` pagination: pass `offset` (default 0) to read past the 200k-char per-call cap; thread the `Y` from the `[TRUNCATED — returned chars [X, Y) of Z total. Re-call with offset=Y …]` footer back as the next `offset`. **Stop paginating once the section the agent needs is in hand.**
+- `webfetch` pagination: pass `offset` (default 0) to read past the 200k-char per-call cap; thread the `Y` from the `[TRUNCATED — returned chars [X, Y) of Z total. Re-call with offset=Y …]` footer back as the next `offset`. The range is half-open (`X` inclusive, `Y` exclusive, like JS `slice` / Python ranges) so passing `Y` resumes exactly where the previous chunk stopped, with no overlap or gap. **Stop paginating once the section the agent needs is in hand.**
 - On `429`/`503`, honors `Retry-After` (delta-seconds or HTTP-date) for **one** retry, capped at 10s. No backoff, no retry on other statuses.
 - Cross-host redirects are surfaced in-band via a `[REDIRECTED — input was https://INPUT_HOST, final URL is FINAL_URL]` line prepended to the markdown; userinfo (`user:pass@`) is stripped. Same-host redirects produce no notice.
 - Honors the `charset=` parameter on `Content-Type` for response decoding (e.g. `windows-1250`, `iso-8859-2`, `shift_jis`, `gb2312`). Unknown labels fall back to UTF-8.

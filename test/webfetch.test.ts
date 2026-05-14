@@ -137,6 +137,40 @@ describe("fetchAsMarkdown", () => {
     expect(md2).not.toMatch(/```/);
   });
 
+  it("drops the ```json fence when wrapped fits but notice+wrapped overflows (cross-host boundary)", async () => {
+    // Pins the `(notice + wrapped).length <= maxChars` gate against a
+    // future "simplify back to wrapped.length" refactor: a cross-host
+    // JSON response where wrapped.length alone fits but the prepended
+    // redirect notice pushes the first chunk over must downgrade to
+    // raw pretty-printed JSON, not silently corrupt by emitting an
+    // opening fence chunk[0] can't close.
+    //
+    // Sized so the math is checkable inline:
+    //   notice  = "[REDIRECTED — input was https://a.example, final URL is https://b.example/x]\n\n"  (85 chars)
+    //   pretty  = `{\n  "a": "<150 X's>"\n}`                                                                (164 chars)
+    //   wrapped = "```json\n" + pretty + "\n```"                                                           (176 chars)
+    // With max_chars=200: wrapped (176) ≤ 200 ✅ but notice+wrapped (261) > 200 → must NOT wrap.
+    const pad = "X".repeat(150);
+    const body = JSON.stringify({ a: pad });
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://b.example/x", 301))
+      .mockResolvedValueOnce(
+        new Response(body, {
+          status: 200,
+          headers: new Headers({ "content-type": "application/json" }),
+        }),
+      );
+    vi.stubGlobal("fetch", mock);
+
+    const md = await fetchAsMarkdown({ url: "https://a.example", max_chars: 200 });
+    expect(md).toMatch(/^\[REDIRECTED/);
+    expect(md).not.toMatch(/```json/);
+    // Pretty-printed body still present (proves we took the unwrapped
+    // branch, not some other fallback).
+    expect(md).toMatch(/"a": "XXX/);
+  });
+
   it("throws on PDF when pdftotext is unavailable (preserves pre-#119 error)", async () => {
     // Default mock returns null (no pdftotext). The verbatim error string
     // is the regression-free contract: users who haven't installed poppler

@@ -708,7 +708,12 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // Notice is prepended to the source text passed to `paginate`, so the
   // first chunk (offset=0) carries it and subsequent chunks don't —
   // matches the issue's "one in-band notice line is the contract" and
-  // keeps the half-open [offset, end) tiling intact.
+  // keeps the half-open [offset, end) tiling intact. Losing provenance
+  // on offset≥1 is acceptable: the agent already saw the notice on the
+  // chunk[0] response that produced the offset value it's now passing
+  // back, so re-emitting it on every chunk would be redundant noise
+  // (and would shift byte offsets across chunks, breaking the tiling).
+  // See issue #133 for the full thread.
   // Strip userinfo before echoing the final URL: a redirect to
   // https://user:token@evil.example/ would otherwise leak the credential
   // into the markdown the model then logs. Query/fragment are preserved
@@ -716,7 +721,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // re-fetch directly.
   let finalUrlForNotice = finalUrl.toString();
   if (finalUrl.username || finalUrl.password) {
-    const sanitized = new URL(finalUrl.toString());
+    const sanitized = new URL(finalUrl);
     sanitized.username = "";
     sanitized.password = "";
     finalUrlForNotice = sanitized.toString();

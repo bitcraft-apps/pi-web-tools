@@ -227,7 +227,7 @@ export function paginate(text: string, offset: number, maxChars: number): string
     // race) or (b) its own offset arithmetic is off (restart wastes a
     // fetch). The honest signal is "the prior chunk was already the
     // tail" — the caller decides whether to re-fetch from 0 or stop.
-    return `[OFFSET ${offset} PAST END — document is ${total} chars total; the previous chunk was the tail. If the document was expected to be longer, it shrank between calls (no cache; each fetch re-runs the pipeline).]`;
+    return `[OFFSET ${offset} PAST END — document is ${total} chars total. If the document was expected to be longer, it shrank between calls (no cache; each fetch re-runs the pipeline).]`;
   }
   let end = Math.min(offset + maxChars, total);
   // Snap end down by one if the chunk would end mid-surrogate-pair: a lone
@@ -240,29 +240,49 @@ export function paginate(text: string, offset: number, maxChars: number): string
   //
   // Skip when the chunk reaches end-of-document (no next call to receive
   // the deferred low surrogate) or when snapping would empty the slice
-  // (maxChars=1 on a surrogate half — pathological; ship the half rather
-  // than loop forever).
+  // Skip when the chunk reaches end-of-document (no next call to receive
+  // the deferred low surrogate) or when the chunk is one char long
+  // (snapping would empty the slice — the high half ships now and the
+  // low half ships at the next offset; runtime callers don't reach
+  // maxChars=1 in practice).
   if (end < total && end - 1 > offset) {
     const last = text.charCodeAt(end - 1);
     if (last >= 0xd800 && last <= 0xdbff) end--;
   }
   const slice = text.slice(offset, end);
   if (end >= total) return slice; // last chunk — no footer
-  return (
-    slice +
-    // Range is half-open: `offset` is inclusive, `end` is exclusive (matches
-    // String.prototype.slice). The next-chunk hint reuses `end` as the
-    // inclusive start of the following call, so [offset, end) tiles cleanly.
-    `\n\n[TRUNCATED — returned chars [${offset}, ${end}) of ${total} total. Re-call with offset=${end} to read the next chunk.]`
-  );
+  // Range is half-open: `offset` is inclusive, `end` is exclusive (matches
+  // String.prototype.slice). The next-chunk hint reuses `end` as the
+  // inclusive start of the following call, so [offset, end) tiles cleanly.
+  return slice + buildPaginationFooter(offset, end, total);
 }
 
-// Single source of truth for the pagination footer literal. Kept module-
-// private; tests strip the footer via `stripPaginationFooter` below rather
-// than re-encoding the wording (a footer reword would otherwise silently
-// break reconstruction-equality tests by leaving the footer in).
-const PAGINATION_FOOTER_RE =
-  /\n\n\[TRUNCATED — returned chars \[\d+, \d+\) of \d+ total\. Re-call with offset=\d+ to read the next chunk\.\]$/;
+// Single source of truth for the pagination footer wording. The emitted
+// string and the strip regex are both derived from the template parts
+// below so a reword can't desync them — a typo in the literal would
+// otherwise silently no-op `stripPaginationFooter` and break
+// reconstruction tests. Kept module-private; tests strip via
+// `stripPaginationFooter`.
+const PAGINATION_FOOTER_PARTS = [
+  "\n\n[TRUNCATED — returned chars [",
+  ", ",
+  ") of ",
+  " total. Re-call with offset=",
+  " to read the next chunk.]",
+] as const;
+
+function buildPaginationFooter(offset: number, end: number, total: number): string {
+  const [a, b, c, d, e] = PAGINATION_FOOTER_PARTS;
+  return `${a}${offset}${b}${end}${c}${total}${d}${end}${e}`;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const PAGINATION_FOOTER_RE = new RegExp(
+  PAGINATION_FOOTER_PARTS.map(escapeRegex).join("\\d+") + "$",
+);
 
 /**
  * Strip the trailing TRUNCATED footer (if any) from a paginated chunk so
@@ -694,6 +714,13 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
       // for any agent that renders fenced markdown. Falling back to the
       // raw pretty-printed body keeps every chunk self-consistent at the
       // cost of losing the language hint on large JSON responses.
+      //
+      // The gate is per-call, not stable across paginated calls of the
+      // same URL: there is no cache, so a body that grew between calls
+      // could in principle wrap at N=0 and unwrap at N>0. Intentional —
+      // the wrapped branch is the one that fits in a single chunk and
+      // emits no footer, so the agent never re-calls and never observes
+      // the inconsistency.
       if (wrapped.length <= maxChars) {
         return paginate(wrapped, offset, maxChars);
       }
@@ -968,7 +995,12 @@ const webfetchSchema = Type.Object({
     // that bypass schema validation (e.g. direct fetchAsMarkdown imports).
     Type.Integer({
       minimum: 0,
-      maximum: MAX_RESPONSE_BYTES,
+      // -1 because the runtime past-end short-circuit makes
+      // offset === MAX_RESPONSE_BYTES a no-op (always returns the
+      // past-end marker, since total <= MAX_RESPONSE_BYTES). Single
+      // source of truth: schema rejects what runtime would treat as
+      // garbage.
+      maximum: MAX_RESPONSE_BYTES - 1,
       description:
         "Character offset into the extracted markdown (default 0). When the previous fetch returned a `[TRUNCATED ... Re-call with offset=N ...]` footer, pass that N here to read the next chunk. There is no cache between calls — each paginated read re-fetches and re-extracts.",
       default: 0,

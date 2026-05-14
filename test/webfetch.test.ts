@@ -121,6 +121,20 @@ describe("fetchAsMarkdown", () => {
     // we kept the JSON.parse → JSON.stringify path and only dropped fences.
     expect(md).toMatch(/\n {4}"i": 0/);
     expect(md).toMatch(/TRUNCATED/);
+
+    // Continuation must also be raw (no stray opening fence on chunk[1+],
+    // no orphan closing ``` either) — the corruption claim in the
+    // comment is about chunk[1+], not chunk[0]. Without this, a
+    // regression that re-emitted ```json at every chunk start (or that
+    // closed the fence on chunk[0] and reopened on chunk[1]) would
+    // satisfy the chunk[0] assertions above.
+    mockFetchOnce({ body: big, headers: { "content-type": "application/json" } });
+    const md2 = await fetchAsMarkdown({
+      url: "https://example.com/big.json",
+      max_chars: 50_000,
+      offset: 50_000,
+    });
+    expect(md2).not.toMatch(/```/);
   });
 
   it("throws on PDF when pdftotext is unavailable (preserves pre-#119 error)", async () => {
@@ -376,6 +390,14 @@ describe("fetchAsMarkdown", () => {
     expect(reconstructed).not.toBe(bodyA);
     expect(reconstructed).not.toBe(bodyB);
     expect(reconstructed.length).toBe(450_000);
+    // Positional assertion: chunk1 came from bodyB, so the byte at
+    // index 250_000 (50K into chunk1) must be 'b'. Without this, a
+    // hypothetical regression that returned bodyA on every call would
+    // still satisfy the inequality (bodyA != reconstructed-with-footers-
+    // stripped is false — wait, identical bodies would reconstruct to
+    // bodyA). Guards against that: a chunk-mix-up that loses bodyB
+    // entirely would also flip this char back to 'a'.
+    expect(reconstructed[250_000]).toBe("b");
   });
 
   it("rejects response > 5MB via content-length", async () => {
@@ -1905,7 +1927,7 @@ describe("paginate", () => {
     const out = paginate(text, 500, 100);
     expect(out).toMatch(/OFFSET 500 PAST END/);
     expect(out).toMatch(/document is 500 chars total/);
-    expect(out).toMatch(/the previous chunk was the tail/);
+    expect(out).toMatch(/shrank between calls/);
     // No "retry from offset=0" hint — restart-from-zero hits the same race
     // (doc shrank between calls) and wastes a fetch on an arithmetic error.
     expect(out).not.toMatch(/Re-call with offset=0/);

@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 
+// Shared by extract.ts, html2md.ts, pdf.ts.
+
 /**
  * Check whether `cmd` is resolvable on $PATH.
  *
@@ -10,13 +12,12 @@ import { spawn } from "node:child_process";
  */
 export async function commandExists(cmd: string): Promise<boolean> {
   return new Promise((resolve) => {
-    let child;
     try {
-      child = spawn("which", [cmd], { stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn("which", [cmd], { stdio: ["ignore", "pipe", "pipe"] });
+      child.on("error", () => resolve(false));
+      child.on("close", (code) => resolve(code === 0));
     } catch {
-      return resolve(false);
+      resolve(false);
     }
-    child.on("error", () => resolve(false));
-    child.on("close", (code) => resolve(code === 0));
   });
 }

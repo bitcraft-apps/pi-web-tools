@@ -69,8 +69,7 @@ beforeEach(() => {
 describe("detectExtractor", () => {
   it("prefers trafilatura when both are present", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (isWhichSpawn(cmd, args, "trafilatura"))
-        return fakeChild("/usr/bin/trafilatura\n", 0);
+      if (isWhichSpawn(cmd, args, "trafilatura")) return fakeChild("/usr/bin/trafilatura\n", 0);
       if (isWhichSpawn(cmd, args, "rdrview")) return fakeChild("/usr/bin/rdrview\n", 0);
       return fakeChild("", 1);
     });
@@ -99,8 +98,7 @@ describe("detectExtractor", () => {
 
   it("memoizes detection across calls (which probed at most once per binary)", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (isWhichSpawn(cmd, args, "trafilatura"))
-        return fakeChild("/usr/bin/trafilatura\n", 0);
+      if (isWhichSpawn(cmd, args, "trafilatura")) return fakeChild("/usr/bin/trafilatura\n", 0);
       return fakeChild("", 1);
     });
     await detectExtractor();
@@ -112,8 +110,7 @@ describe("detectExtractor", () => {
 
   it("single-flights concurrent first calls", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
-      if (isWhichSpawn(cmd, args, "trafilatura"))
-        return fakeChild("/usr/bin/trafilatura\n", 0);
+      if (isWhichSpawn(cmd, args, "trafilatura")) return fakeChild("/usr/bin/trafilatura\n", 0);
       return fakeChild("", 1);
     });
     await Promise.all([detectExtractor(), detectExtractor(), detectExtractor()]);

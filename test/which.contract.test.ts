@@ -38,12 +38,7 @@ describe("commandExists() spawn contract", () => {
     // Asserting the full tuple (rather than positional indices behind a cast)
     // means a refactor that changes argv shape will fail this test loudly
     // instead of silently passing.
-    expect(args).toEqual([
-      "-c",
-      'command -v "$1" >/dev/null 2>&1',
-      "_",
-      "node; echo hi",
-    ]);
+    expect(args).toEqual(["-c", 'command -v "$1" >/dev/null 2>&1', "_", "node; echo hi"]);
     expect(opts).toMatchObject({ stdio: ["ignore", "ignore", "ignore"] });
   });
 });

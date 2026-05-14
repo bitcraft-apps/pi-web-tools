@@ -400,6 +400,53 @@ describe("fetchAsMarkdown", () => {
     expect(reconstructed[250_000]).toBe("b");
   });
 
+  it("reconstructed output desyncs when upstream changes length mid-pagination (issue #132)", async () => {
+    // Companion to the equal-length desync test above. The more common
+    // real-world case is a page edited shorter or longer between calls,
+    // which exercises the footer's offset arithmetic against a now-wrong
+    // `total`: the chunk0 footer cites total=450_000 and points at
+    // offset=200_000, but the second fetch sees total=300_000 — so the
+    // re-call lands two-thirds into a different document. Demonstrates
+    // that the per-chunk-internally-consistent footer still misleads
+    // reconstruction when `total` itself moves under it.
+    const bodyA = "a".repeat(450_000);
+    const bodyB = "b".repeat(300_000); // shorter — different total
+
+    mockFetchOnce({ body: bodyA, headers: { "content-type": "text/plain" } });
+    const chunk0 = await fetchAsMarkdown({
+      url: "https://example.com/shrinking.txt",
+      max_chars: 200_000,
+      offset: 0,
+    });
+    // chunk0's footer says "total=450_000, next offset=200_000". An
+    // honest re-call threads that 200_000 forward; the now-shorter bodyB
+    // happily serves a chunk starting at offset=200_000 (within its
+    // 300_000 length), but it's the wrong document.
+    mockFetchOnce({ body: bodyB, headers: { "content-type": "text/plain" } });
+    const chunk1 = await fetchAsMarkdown({
+      url: "https://example.com/shrinking.txt",
+      max_chars: 200_000,
+      offset: 200_000,
+    });
+
+    expect(chunk0).toMatch(/of 450000 total/);
+    // chunk1's footer reports the new (shorter) total — internally
+    // consistent per call, but desynced from chunk0's view of the world.
+    // bodyB at offset=200_000 has 100_000 chars left, so chunk1 is the
+    // tail (no footer) of bodyB, not a continuation of bodyA.
+    expect(chunk1).not.toMatch(/TRUNCATED/);
+    expect(stripPaginationFooter(chunk1)).toBe("b".repeat(100_000));
+
+    const reconstructed = stripPaginationFooter(chunk0) + stripPaginationFooter(chunk1);
+    expect(reconstructed).not.toBe(bodyA);
+    expect(reconstructed).not.toBe(bodyB);
+    // 200K of 'a' followed by 100K of 'b' — garbage, but every
+    // individual call succeeded with an internally-consistent footer.
+    expect(reconstructed.length).toBe(300_000);
+    expect(reconstructed[199_999]).toBe("a");
+    expect(reconstructed[200_000]).toBe("b");
+  });
+
   it("rejects response > 5MB via content-length", async () => {
     mockFetchOnce({
       body: "x",

@@ -239,12 +239,18 @@ export function paginate(text: string, offset: number, maxChars: number): string
   // exact, so chunks still concatenate losslessly.
   //
   // Skip when the chunk reaches end-of-document (no next call to receive
-  // the deferred low surrogate) or when snapping would empty the slice
-  // Skip when the chunk reaches end-of-document (no next call to receive
   // the deferred low surrogate) or when the chunk is one char long
   // (snapping would empty the slice — the high half ships now and the
   // low half ships at the next offset; runtime callers don't reach
   // maxChars=1 in practice).
+  //
+  // The guard is intentionally one-sided (chunk *end* only). At the
+  // chunk *start* the symmetric case — `offset` landing on a lone low
+  // surrogate — can only happen if a previous call shipped a lone high
+  // surrogate (i.e. the maxChars=1 escape hatch above fired). Production
+  // callers don't reach maxChars=1, so the asymmetry is deliberate, not
+  // a missing case; adding a start-side snap would silently drop the low
+  // half and break the half-open [offset, end) tiling guarantee.
   if (end < total && end - 1 > offset) {
     const last = text.charCodeAt(end - 1);
     if (last >= 0xd800 && last <= 0xdbff) end--;
@@ -290,6 +296,13 @@ const PAGINATION_FOOTER_RE = new RegExp(
  * with `paginate` and the footer regex so a footer reword stays
  * single-source-of-truth. Exported for tests; production callers don't
  * need this — the agent threads `offset` forward without reassembling.
+ *
+ * Does NOT strip the `[OFFSET N PAST END …]` marker: that marker is a
+ * standalone diagnostic returned in lieu of a chunk, not a footer
+ * appended to one. Reconstruction tests bound their offsets to the body
+ * and never observe it; if you walk one chunk past the tail (e.g. as a
+ * boundary probe), filter the marker at the call site rather than
+ * teaching this helper to swallow it.
  */
 export function stripPaginationFooter(s: string): string {
   return s.replace(PAGINATION_FOOTER_RE, "");
@@ -625,7 +638,12 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   if (!Number.isInteger(offset) || offset < 0) {
     throw new Error(`Invalid offset: ${offset} (must be a non-negative integer)`);
   }
-  if (offset > MAX_RESPONSE_BYTES) {
+  // `>=`, not `>`: offset === MAX_RESPONSE_BYTES is guaranteed-past-end
+  // (total <= MAX_RESPONSE_BYTES by the response-size cap), so the
+  // request would always return the past-end marker — a no-op offset.
+  // Mirrors the schema cap (`maximum: MAX_RESPONSE_BYTES - 1`); single
+  // source of truth across schema-validated and direct callers.
+  if (offset >= MAX_RESPONSE_BYTES) {
     throw new Error(
       `offset ${offset} exceeds the maximum addressable range (${MAX_RESPONSE_BYTES} = MAX_RESPONSE_BYTES); documents that large are not supported`,
     );
@@ -716,11 +734,16 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
       // cost of losing the language hint on large JSON responses.
       //
       // The gate is per-call, not stable across paginated calls of the
-      // same URL: there is no cache, so a body that grew between calls
-      // could in principle wrap at N=0 and unwrap at N>0. Intentional —
-      // the wrapped branch is the one that fits in a single chunk and
-      // emits no footer, so the agent never re-calls and never observes
-      // the inconsistency.
+      // same URL: there is no cache, so a body that changed size between
+      // calls could wrap at one offset and unwrap at another (in either
+      // direction — grew → wrap-then-unwrap, shrank → unwrap-then-wrap).
+      // The grow case is benign: the wrapped branch fits in a single
+      // chunk and emits no footer, so the agent never re-calls. The
+      // shrink case (unwrap at N=0 → wrap at N>0) lands the re-call past
+      // the end of the now-smaller wrapped body, which the past-end
+      // marker in `paginate` reports honestly — that recovery path is
+      // the intended fallback here, same as for any other mid-pagination
+      // mutation.
       if (wrapped.length <= maxChars) {
         return paginate(wrapped, offset, maxChars);
       }

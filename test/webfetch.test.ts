@@ -74,7 +74,7 @@ afterEach(() => {
 // reconstruction check.
 const stripPaginationFooter = (s: string): string =>
   s.replace(
-    /\n\n\[TRUNCATED — returned chars \d+\.\.\d+ of \d+ total\. Re-call with offset=\d+ to read the next chunk\.\]$/,
+    /\n\n\[TRUNCATED — returned chars \[\d+, \d+\) of \d+ total\. Re-call with offset=\d+ to read the next chunk\.\]$/,
     "",
   );
 
@@ -153,7 +153,7 @@ describe("fetchAsMarkdown", () => {
     mockFetchOnce({ body: "%PDF", headers: { "content-type": "application/pdf" } });
     const out = await fetchAsMarkdown({ url: "https://example.com/x.pdf", max_chars: 50 });
     expect(out).toMatch(
-      /\[TRUNCATED — returned chars 0\.\.50 of 1000 total\. Re-call with offset=50/,
+      /\[TRUNCATED — returned chars \[0, 50\) of 1000 total\. Re-call with offset=50/,
     );
     expect(out.length).toBeLessThanOrEqual(50 + 200);
   });
@@ -246,7 +246,7 @@ describe("fetchAsMarkdown", () => {
     mockFetchOnce({ body: longHtml });
     const md = await fetchAsMarkdown({ url: "https://example.com", max_chars: 5 });
     expect(md.length).toBeLessThanOrEqual(5 + 200); // body + footer
-    expect(md).toMatch(/\[TRUNCATED — returned chars 0\.\.5 of \d+ total\. Re-call with offset=5/);
+    expect(md).toMatch(/\[TRUNCATED — returned chars \[0, 5\) of \d+ total\. Re-call with offset=5/);
   });
 
   it("rejects negative offset (issue #132)", async () => {
@@ -1815,7 +1815,7 @@ describe("paginate", () => {
     const out = paginate(text, 0, 100);
     expect(out.startsWith("x".repeat(100))).toBe(true);
     expect(out).toMatch(
-      /\[TRUNCATED — returned chars 0\.\.100 of 1000 total\. Re-call with offset=100 to read the next chunk\.\]/,
+      /\[TRUNCATED — returned chars \[0, 100\) of 1000 total\. Re-call with offset=100 to read the next chunk\.\]/,
     );
   });
 
@@ -1823,7 +1823,7 @@ describe("paginate", () => {
     const text = "x".repeat(1000);
     const out = paginate(text, 200, 300);
     expect(out.startsWith("x".repeat(300))).toBe(true);
-    expect(out).toMatch(/returned chars 200\.\.500 of 1000 total/);
+    expect(out).toMatch(/returned chars \[200, 500\) of 1000 total/);
     expect(out).toMatch(/offset=500/);
   });
 
@@ -1852,5 +1852,20 @@ describe("paginate", () => {
   it("past-end marker fires for offset strictly greater than length too", () => {
     const out = paginate("hello", 999, 50);
     expect(out).toMatch(/OFFSET 999 PAST END/);
+  });
+
+  it("returns empty string for empty document at offset=0 (not the past-end marker)", () => {
+    // An empty extracted body is a legitimate result (e.g. a 204-shaped
+    // text response, or a page that extracts down to nothing). Returning
+    // the past-end recovery marker here would mislead the model into
+    // thinking it asked for the wrong offset.
+    const out = paginate("", 0, 100);
+    expect(out).toBe("");
+  });
+
+  it("still returns past-end marker for empty document at offset > 0", () => {
+    const out = paginate("", 5, 100);
+    expect(out).toMatch(/OFFSET 5 PAST END/);
+    expect(out).toMatch(/document is 0 chars total/);
   });
 });

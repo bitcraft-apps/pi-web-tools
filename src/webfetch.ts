@@ -204,6 +204,11 @@ function classifyMime(ct: string): BodyKind | "binary" {
 // — fetchAsMarkdown enforces both before calling.
 export function paginate(text: string, offset: number, maxChars: number): string {
   const total = text.length;
+  // Empty document at offset=0 is a legitimate result (e.g. 204-shaped
+  // text body, blank markdown after extraction); return "" rather than
+  // a past-end recovery marker, which would mislead the model into
+  // thinking it asked for the wrong offset.
+  if (total === 0 && offset === 0) return "";
   if (offset >= total) {
     // Past-end is reachable via legitimate "next chunk" requests near the
     // tail; throwing would force the caller to add boundary-detection
@@ -212,11 +217,20 @@ export function paginate(text: string, offset: number, maxChars: number): string
     return `[OFFSET ${offset} PAST END — document is ${total} chars total. Re-call with offset=0 or omit offset to read from the start.]`;
   }
   const end = Math.min(offset + maxChars, total);
+  // Slicing on UTF-16 code units can split a surrogate pair at the chunk
+  // boundary, producing a lone surrogate that decoders render as U+FFFD.
+  // Cosmetic only — content reassembled across chunks via string
+  // concatenation rejoins the halves losslessly. Snapping to a code-point
+  // boundary would complicate offset arithmetic the model threads back
+  // verbatim from the footer.
   const slice = text.slice(offset, end);
   if (end >= total) return slice; // last chunk — no footer
   return (
     slice +
-    `\n\n[TRUNCATED — returned chars ${offset}..${end} of ${total} total. Re-call with offset=${end} to read the next chunk.]`
+    // Range is half-open: `offset` is inclusive, `end` is exclusive (matches
+    // String.prototype.slice). The next-chunk hint reuses `end` as the
+    // inclusive start of the following call, so [offset, end) tiles cleanly.
+    `\n\n[TRUNCATED — returned chars [${offset}, ${end}) of ${total} total. Re-call with offset=${end} to read the next chunk.]`
   );
 }
 
@@ -537,11 +551,15 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   const url = validateUrl(input.url);
   const maxChars = Math.min(Math.max(1, input.max_chars ?? MAX_CHARS_DEFAULT), MAX_CHARS_HARD_CAP);
   // Defensive cap (issue #132): the extracted markdown can never exceed
-  // MAX_RESPONSE_BYTES (5 MB → at most 5,242,880 JS string units, since
-  // one wire byte yields ≤1 UTF-16 unit after decode + extraction). Any
-  // offset beyond that is structurally past-end no matter what URL is
-  // fetched — reject up front so a pathological offset=2^53 can't
-  // allocate or motivate an unbounded slice.
+  // MAX_RESPONSE_BYTES (5 MB). The cap compares JS string units against a
+  // byte budget; this is a deliberately loose upper bound, not a tight
+  // invariant. Pandoc/trafilatura can grow output (list bullets, escaped
+  // chars, repeated extracted headings), so the post-extraction string
+  // length is not strictly ≤ wire-byte count — but it stays well under
+  // any offset that would survive the response-size cap below. The point
+  // here is just to reject pathological offsets (e.g. 2^53) up front so
+  // they can't allocate or motivate an unbounded slice; an exact bound
+  // would buy nothing.
   const offset = input.offset ?? 0;
   if (!Number.isInteger(offset) || offset < 0) {
     throw new Error(`Invalid offset: ${offset} (must be a non-negative integer)`);
@@ -1123,11 +1141,11 @@ export const webfetchTool = defineTool<typeof webfetchSchema, WebfetchToolDetail
     "Fetch a URL and return its main text content as markdown. HTML is converted via pandoc or w3m. If `trafilatura` or `rdrview` is on $PATH, runs a Reader-View-style extraction pre-pass to strip page chrome (nav/sidebar/footer), typically shrinking output 5–20× on chrome-heavy pages. Falls back transparently to the full page if no extractor is installed or extraction looks wrong. Use after `websearch` to read full content of a result, or directly when user gives you a URL. For documents larger than `max_chars`, re-call with the `offset` value reported in the truncation footer to read the next chunk (no cache — each paginated call re-fetches). Cannot fetch binary content (PDF, images). Cannot reach localhost or RFC1918 link-local addresses.",
   parameters: webfetchSchema,
   async execute(_id, params, _signal, _onUpdate, _ctx) {
-    const md = await fetchAsMarkdown({
-      url: params.url,
-      max_chars: params.max_chars,
-      offset: params.offset,
-    });
+    // Forward the validated params object whole rather than re-listing
+    // every field — keeps execute() in sync if webfetchSchema grows.
+    // Safe because webfetchSchema's shape is a structural subset of
+    // FetchInput.
+    const md = await fetchAsMarkdown(params as FetchInput);
     return {
       content: [{ type: "text", text: md }],
       details: { url: params.url, chars: md.length, bytes: Buffer.byteLength(md, "utf-8") },

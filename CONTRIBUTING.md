@@ -2,9 +2,9 @@
 
 Thanks for your interest in contributing to `pi-web-tools`!
 
-This repo follows the [agent-workflow convention](https://agents.md/) and keeps its
-contributor guide in [`AGENTS.md`](./AGENTS.md). Nothing in there is agent-specific —
-the PR, branch, and commit conventions apply equally to human contributors.
+This repo follows the [agents.md convention](https://agents.md/) and keeps its
+contributor guide in [`AGENTS.md`](./AGENTS.md). The PR, branch, and commit
+conventions apply equally to human contributors.
 
 ## Where to look
 

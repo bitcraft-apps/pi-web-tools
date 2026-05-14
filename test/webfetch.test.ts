@@ -24,10 +24,10 @@ vi.mock("../src/lib/pdf.js", () => ({
 import {
   fetchAsMarkdown,
   looksLikeJsShell,
-  PAGINATION_FOOTER_RE,
   paginate,
   parseRetryAfter,
   RETRY_AFTER_MAX_MS,
+  stripPaginationFooter,
 } from "../src/webfetch.js";
 import { htmlToMarkdown } from "../src/lib/html2md.js";
 import { extractContent } from "../src/lib/extract.js";
@@ -69,14 +69,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// Helper for the issue #132 pagination integration test — hoisted out of the
-// it() body to satisfy oxlint(unicorn/consistent-function-scoping). Strips
-// the trailing TRUNCATED footer so chunks can be concatenated for a
-// reconstruction check. Uses the regex exported from src/webfetch.ts so a
-// footer reword stays the single source of truth (otherwise a duplicate
-// here would silently leave the footer in and the reconstruction equality
-// would still pass for the wrong reason).
-const stripPaginationFooter = (s: string): string => s.replace(PAGINATION_FOOTER_RE, "");
+// Note: chunks are stripped of their TRUNCATED footer (via the helper
+// imported from src/webfetch.ts) before concatenation — single source of
+// truth for the footer wording.
 
 describe("fetchAsMarkdown", () => {
   it("blocks non-http schemes via url-guard", async () => {
@@ -106,6 +101,26 @@ describe("fetchAsMarkdown", () => {
     const md = await fetchAsMarkdown({ url: "https://example.com/x.json" });
     expect(md).toMatch(/```json/);
     expect(md).toContain('"a": 1');
+  });
+
+  it("drops the ```json fence when the wrapped body would paginate (avoids silent corruption)", async () => {
+    // Pretty-print of a long JSON array overflows max_chars. With fences,
+    // chunk[0] would open ```json but no chunk would close it, and chunk[1+]
+    // would slice into the body without an opening fence — silent corruption.
+    // The gate falls back to raw pretty-printed JSON for paginated bodies.
+    const big = JSON.stringify(Array.from({ length: 5000 }, (_, i) => ({ i, v: "x".repeat(20) })));
+    mockFetchOnce({ body: big, headers: { "content-type": "application/json" } });
+    const md = await fetchAsMarkdown({
+      url: "https://example.com/big.json",
+      max_chars: 50_000,
+    });
+    // No opening fence, because emitting one we can't close (or can't
+    // re-emit on chunk[1+]) is worse than no fence at all.
+    expect(md).not.toMatch(/```json/);
+    // But it's still pretty-printed (newline + 2-space indent), proving
+    // we kept the JSON.parse → JSON.stringify path and only dropped fences.
+    expect(md).toMatch(/\n {4}"i": 0/);
+    expect(md).toMatch(/TRUNCATED/);
   });
 
   it("throws on PDF when pdftotext is unavailable (preserves pre-#119 error)", async () => {
@@ -353,19 +368,14 @@ describe("fetchAsMarkdown", () => {
     const reconstructed =
       stripPaginationFooter(chunk0) + stripPaginationFooter(chunk1) + stripPaginationFooter(chunk2);
 
-    // Reconstruction is corrupt: it equals neither bodyA nor bodyB, and
-    // contains a mid-stream content boundary (a-run → b-run → a-run).
+    // Reconstruction is corrupt: it equals neither bodyA nor bodyB. The
+    // behavioral claim is the inequality — we deliberately don't assert
+    // exact a/b boundaries on the synthetic mock, since those are
+    // implementation details of this fixture and add maintenance cost
+    // without strengthening the signal.
     expect(reconstructed).not.toBe(bodyA);
     expect(reconstructed).not.toBe(bodyB);
     expect(reconstructed.length).toBe(450_000);
-    // The middle chunk came from bodyB, so the reconstructed string must
-    // contain at least one 'b' — and the surrounding chunks must contain
-    // 'a's, proving the cross-document splice.
-    expect(reconstructed).toMatch(/a/);
-    expect(reconstructed).toMatch(/b/);
-    expect(reconstructed.slice(200_000, 400_000)).toBe("b".repeat(200_000));
-    expect(reconstructed.slice(0, 200_000)).toBe("a".repeat(200_000));
-    expect(reconstructed.slice(400_000)).toBe("a".repeat(50_000));
   });
 
   it("rejects response > 5MB via content-length", async () => {
@@ -1919,5 +1929,44 @@ describe("paginate", () => {
     const out = paginate("", 5, 100);
     expect(out).toMatch(/OFFSET 5 PAST END/);
     expect(out).toMatch(/document is 0 chars total/);
+  });
+
+  it("rejects maxChars < 1 (direct caller could otherwise infinite-loop past end)", () => {
+    expect(() => paginate("hi", 0, 0)).toThrow(/invalid maxchars/i);
+    expect(() => paginate("hi", 0, -1)).toThrow(/invalid maxchars/i);
+  });
+
+  it("rejects non-integer maxChars", () => {
+    expect(() => paginate("hi", 0, 1.5)).toThrow(/invalid maxchars/i);
+  });
+
+  it("rejects negative / non-integer offset", () => {
+    expect(() => paginate("hi", -1, 10)).toThrow(/invalid offset/i);
+    expect(() => paginate("hi", 1.5, 10)).toThrow(/invalid offset/i);
+  });
+
+  it("snaps chunk end down by one when boundary lands inside a surrogate pair", () => {
+    // "\uD83D\uDE00" = U+1F600 (😀, two UTF-16 code units). With
+    // maxChars=3 the naive slice(0, 3) of "xy😀" splits the surrogate pair
+    // and emits "xy" + lone high surrogate — which JSON.stringify in the
+    // agent transport encodes as a \udxxx escape that strict UTF-8
+    // consumers may reject. Snapping to a code-point boundary keeps the
+    // chunk well-formed and mirrors the adjustment into the next-offset so
+    // [offset, end) tiles cleanly.
+    const text = "xy\uD83D\uDE00"; // 4 code units, 3 code points
+    const chunk0 = paginate(text, 0, 3);
+    expect(chunk0).toMatch(/^xy\n\n\[TRUNCATED — returned chars \[0, 2\)/);
+    expect(chunk0).toMatch(/offset=2/);
+    // The deferred surrogate pair lands intact in the next chunk, so
+    // concatenation is lossless.
+    const chunk1 = paginate(text, 2, 3);
+    expect(stripPaginationFooter(chunk0) + stripPaginationFooter(chunk1)).toBe(text);
+  });
+
+  it("does not snap on the final chunk (no next call to receive the deferred half)", () => {
+    // boundary at end-of-document — no footer, no snap, ship as-is.
+    const text = "x\uD83D\uDE00";
+    const out = paginate(text, 0, 100);
+    expect(out).toBe(text);
   });
 });

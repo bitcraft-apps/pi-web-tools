@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.3.0...v1.3.1) (2026-05-14)
+
+
+### Bug Fixes
+
+* **which:** use POSIX `command -v` via sh for busybox/distroless support ([#155](https://github.com/bitcraft-apps/pi-web-tools/issues/155)) ([5890f06](https://github.com/bitcraft-apps/pi-web-tools/commit/5890f06f054ff8454e4a0a5ace05677d3d982c63))
+
 ## [1.3.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.2.0...v1.3.0) (2026-05-14)
 
 

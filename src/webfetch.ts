@@ -892,6 +892,13 @@ const webfetchSchema = Type.Object({
       default: MAX_CHARS_DEFAULT,
     }),
   ),
+  offset: Type.Optional(
+    Type.Number({
+      description:
+        "Character offset into the extracted markdown (default 0). When the previous fetch returned a `[TRUNCATED ... Re-call with offset=N ...]` footer, pass that N here to read the next chunk. There is no cache between calls — each paginated read re-fetches and re-extracts.",
+      default: 0,
+    }),
+  ),
 });
 
 export interface WebfetchToolDetails {
@@ -911,6 +918,7 @@ export interface WebfetchToolDetails {
 export interface WebfetchCallArgs {
   url?: string;
   max_chars?: number;
+  offset?: number;
 }
 
 /**
@@ -1017,6 +1025,12 @@ export function formatWebfetchCall(
   if (typeof args?.max_chars === "number" && args.max_chars !== MAX_CHARS_DEFAULT) {
     text += " " + theme.fg("muted", `max_chars=${args.max_chars}`);
   }
+  // Mirror the max_chars convention: only show offset when the LLM passed
+  // a non-default (i.e. paginated re-read), so the common single-shot
+  // header stays compact. Issue #132.
+  if (typeof args?.offset === "number" && args.offset !== 0) {
+    text += " " + theme.fg("muted", `offset=${args.offset}`);
+  }
   return text;
 }
 
@@ -1106,10 +1120,14 @@ export const webfetchTool = defineTool<typeof webfetchSchema, WebfetchToolDetail
   name: "webfetch",
   label: "Web Fetch",
   description:
-    "Fetch a URL and return its main text content as markdown. HTML is converted via pandoc or w3m. If `trafilatura` or `rdrview` is on $PATH, runs a Reader-View-style extraction pre-pass to strip page chrome (nav/sidebar/footer), typically shrinking output 5–20× on chrome-heavy pages. Falls back transparently to the full page if no extractor is installed or extraction looks wrong. Use after `websearch` to read full content of a result, or directly when user gives you a URL. Cannot fetch binary content (PDF, images). Cannot reach localhost or RFC1918 link-local addresses.",
+    "Fetch a URL and return its main text content as markdown. HTML is converted via pandoc or w3m. If `trafilatura` or `rdrview` is on $PATH, runs a Reader-View-style extraction pre-pass to strip page chrome (nav/sidebar/footer), typically shrinking output 5–20× on chrome-heavy pages. Falls back transparently to the full page if no extractor is installed or extraction looks wrong. Use after `websearch` to read full content of a result, or directly when user gives you a URL. For documents larger than `max_chars`, re-call with the `offset` value reported in the truncation footer to read the next chunk (no cache — each paginated call re-fetches). Cannot fetch binary content (PDF, images). Cannot reach localhost or RFC1918 link-local addresses.",
   parameters: webfetchSchema,
   async execute(_id, params, _signal, _onUpdate, _ctx) {
-    const md = await fetchAsMarkdown({ url: params.url, max_chars: params.max_chars });
+    const md = await fetchAsMarkdown({
+      url: params.url,
+      max_chars: params.max_chars,
+      offset: params.offset,
+    });
     return {
       content: [{ type: "text", text: md }],
       details: { url: params.url, chars: md.length, bytes: Buffer.byteLength(md, "utf-8") },

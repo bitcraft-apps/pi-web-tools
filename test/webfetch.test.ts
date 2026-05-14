@@ -68,6 +68,16 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// Helper for the issue #132 pagination integration test — hoisted out of the
+// it() body to satisfy oxlint(unicorn/consistent-function-scoping). Strips
+// the trailing TRUNCATED footer so chunks can be concatenated for a
+// reconstruction check.
+const stripPaginationFooter = (s: string): string =>
+  s.replace(
+    /\n\n\[TRUNCATED — returned chars \d+\.\.\d+ of \d+ total\. Re-call with offset=\d+ to read the next chunk\.\]$/,
+    "",
+  );
+
 describe("fetchAsMarkdown", () => {
   it("blocks non-http schemes via url-guard", async () => {
     await expect(fetchAsMarkdown({ url: "ftp://example.com" })).rejects.toThrow(/scheme/i);
@@ -142,7 +152,9 @@ describe("fetchAsMarkdown", () => {
     vi.mocked(pdfToText).mockResolvedValueOnce("x".repeat(1000));
     mockFetchOnce({ body: "%PDF", headers: { "content-type": "application/pdf" } });
     const out = await fetchAsMarkdown({ url: "https://example.com/x.pdf", max_chars: 50 });
-    expect(out).toMatch(/\[TRUNCATED — returned chars 0\.\.50 of 1000 total\. Re-call with offset=50/);
+    expect(out).toMatch(
+      /\[TRUNCATED — returned chars 0\.\.50 of 1000 total\. Re-call with offset=50/,
+    );
     expect(out.length).toBeLessThanOrEqual(50 + 200);
   });
 
@@ -239,15 +251,15 @@ describe("fetchAsMarkdown", () => {
 
   it("rejects negative offset (issue #132)", async () => {
     // No fetch mock needed — validation runs before the network call.
-    await expect(
-      fetchAsMarkdown({ url: "https://example.com", offset: -1 }),
-    ).rejects.toThrow(/invalid offset/i);
+    await expect(fetchAsMarkdown({ url: "https://example.com", offset: -1 })).rejects.toThrow(
+      /invalid offset/i,
+    );
   });
 
   it("rejects non-integer offset (issue #132)", async () => {
-    await expect(
-      fetchAsMarkdown({ url: "https://example.com", offset: 1.5 }),
-    ).rejects.toThrow(/invalid offset/i);
+    await expect(fetchAsMarkdown({ url: "https://example.com", offset: 1.5 })).rejects.toThrow(
+      /invalid offset/i,
+    );
   });
 
   it("rejects offset > MAX_RESPONSE_BYTES (issue #132)", async () => {
@@ -291,12 +303,8 @@ describe("fetchAsMarkdown", () => {
       offset: 400_000,
     });
 
-    const stripFooter = (s: string): string =>
-      s.replace(
-        /\n\n\[TRUNCATED — returned chars \d+\.\.\d+ of \d+ total\. Re-call with offset=\d+ to read the next chunk\.\]$/,
-        "",
-      );
-    const reconstructed = stripFooter(chunk0) + stripFooter(chunk1) + stripFooter(chunk2);
+    const reconstructed =
+      stripPaginationFooter(chunk0) + stripPaginationFooter(chunk1) + stripPaginationFooter(chunk2);
     expect(reconstructed.length).toBe(450_000);
     expect(reconstructed).toBe(big);
 

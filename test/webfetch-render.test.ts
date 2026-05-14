@@ -55,6 +55,28 @@ describe("formatWebfetchCall", () => {
     // No URL → no trailing space; matters for copy/paste and snapshot diffs.
     expect(formatWebfetchCall(undefined, theme)).toBe("webfetch");
   });
+
+  it("omits offset segment when offset is 0 or undefined (issue #132)", () => {
+    expect(formatWebfetchCall({ url: "https://example.com/" }, theme)).not.toMatch(/offset=/);
+    expect(formatWebfetchCall({ url: "https://example.com/", offset: 0 }, theme)).not.toMatch(
+      /offset=/,
+    );
+  });
+
+  it("shows offset segment muted when non-zero (issue #132)", () => {
+    expect(formatWebfetchCall({ url: "https://example.com/", offset: 200_000 }, theme)).toBe(
+      "webfetch https://example.com/ offset=200000",
+    );
+  });
+
+  it("shows both max_chars and offset when both are non-default (issue #132)", () => {
+    expect(
+      formatWebfetchCall(
+        { url: "https://example.com/", max_chars: 100_000, offset: 200_000 },
+        theme,
+      ),
+    ).toBe("webfetch https://example.com/ max_chars=100000 offset=200000");
+  });
 });
 
 describe("formatWebfetchResult", () => {

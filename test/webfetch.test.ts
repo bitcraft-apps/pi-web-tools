@@ -137,6 +137,40 @@ describe("fetchAsMarkdown", () => {
     expect(md2).not.toMatch(/```/);
   });
 
+  it("drops the ```json fence when wrapped fits but notice+wrapped overflows (cross-host boundary)", async () => {
+    // Pins the `(notice + wrapped).length <= maxChars` gate against a
+    // future "simplify back to wrapped.length" refactor: a cross-host
+    // JSON response where wrapped.length alone fits but the prepended
+    // redirect notice pushes the first chunk over must downgrade to
+    // raw pretty-printed JSON, not silently corrupt by emitting an
+    // opening fence chunk[0] can't close.
+    //
+    // Sized so the math is checkable inline:
+    //   notice  = "[REDIRECTED — input was https://a.example, final URL is https://b.example/x]\n\n"  (85 chars)
+    //   pretty  = `{\n  "a": "<150 X's>"\n}`                                                                (164 chars)
+    //   wrapped = "```json\n" + pretty + "\n```"                                                           (176 chars)
+    // With max_chars=200: wrapped (176) ≤ 200 ✅ but notice+wrapped (261) > 200 → must NOT wrap.
+    const pad = "X".repeat(150);
+    const body = JSON.stringify({ a: pad });
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://b.example/x", 301))
+      .mockResolvedValueOnce(
+        new Response(body, {
+          status: 200,
+          headers: new Headers({ "content-type": "application/json" }),
+        }),
+      );
+    vi.stubGlobal("fetch", mock);
+
+    const md = await fetchAsMarkdown({ url: "https://a.example", max_chars: 200 });
+    expect(md).toMatch(/^\[REDIRECTED/);
+    expect(md).not.toMatch(/```json/);
+    // Pretty-printed body still present (proves we took the unwrapped
+    // branch, not some other fallback).
+    expect(md).toMatch(/"a": "XXX/);
+  });
+
   it("throws on PDF when pdftotext is unavailable (preserves pre-#119 error)", async () => {
     // Default mock returns null (no pdftotext). The verbatim error string
     // is the regression-free contract: users who haven't installed poppler
@@ -2074,5 +2108,112 @@ describe("paginate", () => {
     const text = "x\uD83D\uDE00";
     const out = paginate(text, 0, 100);
     expect(out).toBe(text);
+  });
+});
+
+function htmlOk(body: string): Response {
+  return new Response(body, {
+    status: 200,
+    headers: new Headers({ "content-type": "text/html; charset=utf-8" }),
+  });
+}
+
+describe("cross-host redirect notice (issue #133)", () => {
+  it("prepends a notice when the final URL is on a different host", async () => {
+    // aka.ms-style cross-host 301: input host (aka.ms) ≠ final host
+    // (dotnet.microsoft.com). The notice carries the full final URL so the
+    // model can re-fetch the redirect target directly on follow-ups.
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://dotnet.microsoft.com/en-us/download", 301))
+      .mockResolvedValueOnce(htmlOk("<h1>Download .NET</h1>"));
+    vi.stubGlobal("fetch", mock);
+
+    const md = await fetchAsMarkdown({ url: "https://aka.ms/dotnet" });
+    // First line is the marker; the body follows after a blank line.
+    expect(md.split("\n")[0]).toBe(
+      "[REDIRECTED — input was https://aka.ms, final URL is https://dotnet.microsoft.com/en-us/download]",
+    );
+    expect(md).toContain("Download .NET");
+  });
+
+  it("does not prepend a notice when no redirect occurred", async () => {
+    const mock = vi.fn().mockResolvedValueOnce(htmlOk("<h1>OK</h1>"));
+    vi.stubGlobal("fetch", mock);
+
+    const md = await fetchAsMarkdown({ url: "https://example.com/page" });
+    expect(md).not.toMatch(/^\[REDIRECTED/);
+  });
+
+  it("does not prepend a notice for same-host redirects", async () => {
+    // /old → /new on the same host is normal HTTP plumbing and noisy to flag.
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://example.com/new", 301))
+      .mockResolvedValueOnce(htmlOk("<h1>OK</h1>"));
+    vi.stubGlobal("fetch", mock);
+
+    const md = await fetchAsMarkdown({ url: "https://example.com/old" });
+    expect(md).not.toMatch(/^\[REDIRECTED/);
+  });
+
+  it("does not prepend a notice when a multi-hop chain ends back on the input host", async () => {
+    // Host equality wins regardless of intermediate hops: input → other → input
+    // is not a cross-host outcome from the model's perspective.
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://other.example/bounce", 302))
+      .mockResolvedValueOnce(redirectResponse("https://example.com/landing", 302))
+      .mockResolvedValueOnce(htmlOk("<h1>OK</h1>"));
+    vi.stubGlobal("fetch", mock);
+
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(md).not.toMatch(/^\[REDIRECTED/);
+  });
+
+  it("treats a www subdomain change as a host change", async () => {
+    // Strict host equality — www.example.com !== example.com gets a notice.
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://www.example.com/", 301))
+      .mockResolvedValueOnce(htmlOk("<h1>Hi</h1>"));
+    vi.stubGlobal("fetch", mock);
+
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    expect(md.split("\n")[0]).toBe(
+      "[REDIRECTED — input was https://example.com, final URL is https://www.example.com/]",
+    );
+  });
+
+  it("strips userinfo from the final URL before echoing (credential leak guard)", async () => {
+    // A redirect target containing credentials must not echo them into
+    // the markdown the model then logs. Host inequality still triggers
+    // the notice; the user:pass@ prefix is scrubbed.
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://user:s3cret@evil.example/path", 302))
+      .mockResolvedValueOnce(htmlOk("<h1>Hi</h1>"));
+    vi.stubGlobal("fetch", mock);
+
+    const md = await fetchAsMarkdown({ url: "https://example.com" });
+    const first = md.split("\n")[0];
+    expect(first).toBe(
+      "[REDIRECTED — input was https://example.com, final URL is https://evil.example/path]",
+    );
+    expect(first).not.toContain("s3cret");
+    expect(first).not.toContain("user:");
+  });
+
+  it("does not prepend a notice for an HTTP→HTTPS upgrade on the same host", async () => {
+    // No host change, just scheme. Already covered by host-equality but pinned
+    // explicitly so a future regression that compares full URLs is loud.
+    const mock = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://example.com/", 301))
+      .mockResolvedValueOnce(htmlOk("<h1>OK</h1>"));
+    vi.stubGlobal("fetch", mock);
+
+    const md = await fetchAsMarkdown({ url: "http://example.com/" });
+    expect(md).not.toMatch(/^\[REDIRECTED/);
   });
 });

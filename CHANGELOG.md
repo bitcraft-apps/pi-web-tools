@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.2](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.3.1...v1.3.2) (2026-08-02)
+
+
+### Bug Fixes
+
+* **deps:** migrate imports and peer deps to [@earendil-works](https://github.com/earendil-works) scope ([#163](https://github.com/bitcraft-apps/pi-web-tools/issues/163)) ([5e01251](https://github.com/bitcraft-apps/pi-web-tools/commit/5e012512b36694eaf679e4c7235e40086239614c))
+
 ## [1.3.1](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.3.0...v1.3.1) (2026-05-14)
 
 

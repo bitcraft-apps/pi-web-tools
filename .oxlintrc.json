@@ -26,7 +26,16 @@
       // Must mirror the top-level `plugins` list + `vitest`. Oxlint overrides
       // replace (don't merge) the array; if you add a plugin above, add it here too.
       "plugins": ["typescript", "unicorn", "oxc", "import", "node", "promise", "vitest"],
-      "rules": {}
+      "rules": {
+        // Disabled for tests only (new in oxlint 1.76). Test helpers are
+        // deliberately declared inside the `describe` they serve — `stubDns`,
+        // `mockFetchSequence`, `overflowChild` and friends read as part of that
+        // block's setup. Hoisting them to module scope to satisfy the rule
+        // would scatter setup away from the tests that use it and invite reuse
+        // across blocks that should stay independent. The recreate-per-call
+        // cost the rule guards against is irrelevant in a test file.
+        "unicorn/consistent-function-scoping": "off"
+      }
     }
   ]
 }

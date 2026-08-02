@@ -70,6 +70,25 @@ no `if hostname === "github.com"` branches, and no autodetection shims like
 "if `gh` is on PATH, reroute github.com URLs through it." The agent picks the
 right CLI for the host; this package provides general primitives only.
 
+### Deferred tool loading does not lower this bar
+
+Since pi 0.80.7 / 0.80.9, extensions can register tools inactive and activate
+them mid-session with `pi.setActiveTools()`. On models with native support
+(Anthropic 4.5+, GPT-5.4+) the added schemas load at the tool-result position
+without invalidating the cached prompt prefix. So the "recurring cost paid by
+every user" claim above is, strictly, avoidable above some tool count. See
+[Dynamic Tool Loading](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#dynamic-tool-loading).
+
+It is not avoidable at two tools. The pattern needs a loader tool kept active
+for the whole session, so hiding N tools costs N+1 registrations plus one
+permanently-present schema — net-negative until N is well past 2. Activating a
+tool that carries `promptSnippet` or `promptGuidelines` also rebuilds the
+system prompt, which invalidates the prefix regardless of schema deferral.
+
+Written down so the tradeoff is not re-derived, not as an invitation. The bar
+above stands unchanged. Revisit only if this package ever carries enough tools
+that the loader overhead is obviously worth paying.
+
 ## GitHub Actions naming
 
 - **Filename:** kebab-case, named after purpose. Tool names are fine when the tool *is* the purpose (e.g. `release-please.yml`, `dependabot.yml`).

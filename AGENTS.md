@@ -28,7 +28,7 @@ Use only the types release-please recognizes. With this repo's default config (n
 - `docs:`, `style:`, `chore:`, `refactor:`, `test:`, `build:`, `ci:` → patch bump if they appear alone, but **hidden from CHANGELOG by default** (won't produce an entry)
 - `<type>!:` or a `BREAKING CHANGE:` footer → major bump
 
-Note: `deps` is **not** a default release-please type. Dependabot PRs in this repo use `ci(deps): …` (type `ci`, scope `deps`), which is hidden from the changelog.
+Note: `deps` is **not** a default release-please type. Dependabot PRs in this repo use `ci(deps): …` for GitHub Actions and `chore(deps): …` for npm packages (scope `deps` in both cases). Both types are hidden from the changelog.
 
 ### Common mistake: unknown types produce no changelog entry and no version bump
 

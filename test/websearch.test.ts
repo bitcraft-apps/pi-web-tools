@@ -30,6 +30,20 @@ describe("websearchTool", () => {
     expect(typeof websearchTool.execute).toBe("function");
   });
 
+  // See the matching block in webfetch.test.ts for why these are asserted.
+  it("advertises itself to the default system prompt", () => {
+    expect(websearchTool.promptSnippet).toBeTruthy();
+    expect(websearchTool.promptSnippet).not.toMatch(/[\r\n]/);
+    expect(websearchTool.promptGuidelines?.length).toBeGreaterThan(0);
+  });
+
+  it("requests constrained sampling without depending on it", () => {
+    expect(websearchTool.constrainedSampling).toEqual({
+      type: "json_schema",
+      strict: "prefer",
+    });
+  });
+
   it("returns JSON content with results from ddgr", async () => {
     vi.mocked(runDdgr).mockResolvedValueOnce([
       { title: "Example", url: "https://example.com", snippet: "snip" },

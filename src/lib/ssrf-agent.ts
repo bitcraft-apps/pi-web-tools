@@ -22,31 +22,50 @@
 // `validateUrl` already rejects literals in the blocked ranges before we
 // ever call fetch.
 //
-// KNOWN CONSTRAINT — undici dual-copy drift
-// ------------------------------------------
-// Node ships its own bundled copy of undici behind global `fetch`. The
-// `dispatcher:` per-request option is recognized by Node's bundled fetch via
-// a duck-typed/symbol interface, and our user-installed undici's `Agent`
-// happens to satisfy it. If the installed undici (`dependencies` in
-// package.json) drifts a major version away from the one Node bundles, the
-// dispatcher hook can silently stop being honored — fetch would then bypass
-// `lookupHook` and re-open the SSRF/DNS-rebinding hole, with no test failure
-// (unit tests stub `dns.lookup`, so they pass even if undici is bypassed).
+// KNOWN CONSTRAINT — undici dual-copy compatibility
+// --------------------------------------------------
+// Node ships its own bundled copy of undici behind global `fetch`. We hand
+// that global fetch a `dispatcher:` built from the *installed* undici
+// (`dependencies` in package.json), so two undici copies meet at one
+// interface. They are not universally compatible: undici 8 reworked the
+// dispatcher handler API, and each side rejects the other's shape.
 //
-// We support `engines.node >= 22`. Node 22 LTS bundles undici 6.x and Node
-// 24 bundles undici 7.x; we cannot pin a single major that matches both, so
-// `dependencies.undici` is set to `^6.0.0 || ^7.0.0` — npm will resolve to
-// the major closest to the host Node, minimizing the symbol-identity risk.
-// Mitigations:
-//   - Range-pin spans both supported Node majors (above) so `npm install`
-//     picks a compatible undici without manual intervention.
-//   - The end-to-end test in test/webfetch.test.ts wraps `lookupHook` in a
-//     `vi.fn()` and asserts `toHaveBeenCalled()` on every rebinding case.
-//     If a future undici/Node combo silently drops the `dispatcher:` option,
-//     that assertion fails (default connector wouldn't go through our hook),
-//     surfacing the bypass instead of letting it ship.
-//   - Track upstream undici / Node interop changes; revisit if Node exposes
-//     a stable public API for connect-time DNS hooks.
+// Measured 2026-08-02 (see issue #166). "ok" = lookup hook fired and the
+// request completed; anything else is the thrown error:
+//
+//                   Node 22 (bundles 6.28)   Node 24 (7.18)   Node 26 (8.9)
+//   installed 6            ok                     ok          invalid onError
+//   installed 7            ok                     ok               ok
+//   installed 8     invalid onRequestStart  invalid onRequestStart  ok
+//
+// `engines.node >= 22` spans all three rows, and undici 7 is the only major
+// compatible with every one. Hence `dependencies.undici` = `^6.0.0 ||
+// ^7.0.0`: npm installs the highest satisfying version, that is 7.x, and 7.x
+// is the bridge.
+//
+//   DO NOT widen this to `^8`. npm would install 8.x and break Node 22 and
+//   Node 24 — most installs. Widening looks like "support the newest Node"
+//   but does the opposite.
+//
+// (An earlier revision of this comment claimed npm resolves "the major
+// closest to the host Node". It does not — npm takes the highest satisfying
+// version regardless of host. The range works because that version is 7.)
+//
+// Mismatches fail loudly, not silently: every incompatible pair above throws
+// at fetch time rather than quietly dropping the dispatcher and re-opening
+// the SSRF hole. The regression guard is the "DNS-rebinding guard" block in
+// test/webfetch.test.ts, which wraps `lookupHook` in a `vi.fn()` and asserts
+// `toHaveBeenCalled()`. It has teeth: forcing undici 8 under Node 24 fails
+// all four cases with "expected lookupHook to be called at least once".
+// CI runs that guard on Node 22, 24 and 26 (`node-matrix` job in
+// .github/workflows/ci.yml), so a bad pairing surfaces on the PR that
+// introduces it rather than in the field.
+//
+// Revisit when: `engines.node` changes, Node drops undici 7 compatibility,
+// or you want the hazard gone entirely — importing `fetch` from the same
+// installed undici instead of using global fetch passes all nine
+// combinations, at the cost of reworking every test that stubs
+// `global.fetch`.
 
 import dns from "node:dns";
 import net from "node:net";

@@ -108,19 +108,9 @@ export interface WebsearchToolDetails {
    * (no JSON.parse on content[0].text in the redraw path).
    *
    * Optional because sessions persisted before this field was added
-   * deserialize without it; the renderer falls back to `count` then to 0.
+   * deserialize without it. The renderer shows those as zero results.
    */
   results?: DdgrResult[];
-  /**
-   * @deprecated since 1.x — see #109. Read-only/legacy: only the
-   * renderer's old-session fallback consumes this, and `execute()` no
-   * longer writes it. New code MUST NOT set `count`; derive from
-   * `results.length` instead. Kept solely so sessions persisted before
-   * `results` existed still render the right header. Removal is
-   * tracked in the linked issue and is non-breaking — the field is
-   * renderer-internal and not part of the public API.
-   */
-  count?: number;
 }
 
 export interface WebsearchCallArgs {
@@ -209,9 +199,10 @@ export function formatWebsearchResult(
   }
 
   const query = details?.query ?? "";
-  // Single source of truth: derive from results when present, fall back to
-  // the legacy `count` field for sessions persisted before `results` existed.
-  const count = details?.results?.length ?? details?.count ?? 0;
+  // Single source of truth. A session persisted without `results` renders
+  // as zero results.
+  const results = details?.results ?? [];
+  const count = results.length;
 
   if (count === 0) {
     return theme.fg("warning", `no results for ${quote(query)}`);
@@ -222,13 +213,6 @@ export function formatWebsearchResult(
 
   if (!expanded) {
     return `${header} (${expandHint})`;
-  }
-
-  // Expanded view. Old sessions persisted before details.results was
-  // added render header-only rather than crashing.
-  const results = details?.results;
-  if (!results || results.length === 0) {
-    return header;
   }
 
   const lines: string[] = [header];

@@ -84,7 +84,7 @@ describe("formatWebsearchResult", () => {
     expect(
       formatWebsearchResult(
         {
-          details: { query: "x", count: 1, results: [SAMPLE_RESULTS[0]!] },
+          details: { query: "x", results: [SAMPLE_RESULTS[0]!] },
           expanded: false,
           isError: false,
           expandHint: EXPAND_HINT,
@@ -117,7 +117,7 @@ describe("formatWebsearchResult", () => {
     expect(
       formatWebsearchResult(
         {
-          details: { query: "nada", count: 0, results: [] },
+          details: { query: "nada", results: [] },
           expanded: false,
           isError: false,
           expandHint: EXPAND_HINT,
@@ -151,18 +151,18 @@ describe("formatWebsearchResult", () => {
     ).toBe("✗ websearch: error");
   });
 
-  it("missing details.results in expanded mode renders header-only (old session compat)", () => {
+  it("details without results renders the empty-results warning", () => {
     expect(
       formatWebsearchResult(
         {
-          details: { query: "old", count: 3 },
+          details: { query: "old" },
           expanded: true,
           isError: false,
           expandHint: EXPAND_HINT,
         },
         theme,
       ),
-    ).toBe('✓ 3 results for "old"');
+    ).toBe('no results for "old"');
   });
 
   it("missing details entirely treats count as 0", () => {

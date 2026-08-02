@@ -11,3 +11,63 @@ updates:
       actions:
         patterns:
           - "*"
+
+  # npm had no Dependabot coverage at all until #171, which is why every
+  # devDependency quietly drifted for ~3 months: oxlint 13 minors behind,
+  # oxfmt 13 minors, vitest a full major, and @typescript/native-preview well
+  # past the "roughly weekly" refresh its own comment in ci.yml promises.
+  # Nothing was ever going to enforce that by hand.
+  #
+  # Grouping mirrors the pinning policy already documented in ci.yml rather
+  # than inventing a new one.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      # `chore(deps)` rather than the `ci(deps)` used for actions above:
+      # these are package dependencies, not CI wiring. Both are release-please
+      # types hidden from the changelog, so neither produces a spurious entry.
+      prefix: "chore"
+      include: "scope"
+    open-pull-requests-limit: 5
+    ignore:
+      # typebox is pinned to mirror the version pi bundles, NOT to track npm
+      # latest — its correct value is "whatever @earendil-works/pi-coding-agent
+      # depends on", which Dependabot has no way to know. A bump here would
+      # break that invariant and turn the drift check red for no reason.
+      # scripts/metrics.sh owns this pin instead. See #163, #164.
+      - dependency-name: "typebox"
+      # undici majors are a compatibility ceiling, not lag. 7.x is the only
+      # major whose Agent is accepted by the undici that Node bundles across
+      # 22, 24 and 26; ^8 breaks Node 22 and 24. Patches and minors within 7.x
+      # are wanted — this is the library doing our network I/O, so security
+      # fixes should still flow. Only the major is blocked.
+      # See the measured matrix in src/lib/ssrf-agent.ts and #166.
+      - dependency-name: "undici"
+        update-types: ["version-update:semver-major"]
+    groups:
+      # oxfmt is pre-1.0 and its output is not stable across versions, so every
+      # bump reformats the world and needs a .git-blame-ignore-revs follow-up
+      # (see #86). Landing the oxc tools together means one reformat diff and
+      # one SHA to record, not three.
+      oxc-toolchain:
+        patterns:
+          - "oxlint"
+          - "oxlint-tsgolint"
+          - "oxfmt"
+      # Preview channel, no semver, daily dev builds. Kept in its own group so
+      # it stays independently pinnable and revertable — ci.yml documents an
+      # escape hatch for when tsgo regresses, and that is unusable if a tsgo
+      # revert also reverts a formatting sweep.
+      tsgo:
+        patterns:
+          - "@typescript/native-preview"
+      dev-dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "oxlint"
+          - "oxlint-tsgolint"
+          - "oxfmt"
+          - "@typescript/native-preview"

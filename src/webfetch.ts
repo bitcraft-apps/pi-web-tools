@@ -1,4 +1,8 @@
-import type { RequestInit as UndiciRequestInit } from "undici";
+import {
+  fetch as undiciFetch,
+  type RequestInit as UndiciRequestInit,
+  type Response as UndiciResponse,
+} from "undici";
 import { validateUrl } from "./lib/url-guard.js";
 import { getSsrfAgent } from "./lib/ssrf-agent.js";
 import { htmlToMarkdown } from "./lib/html2md.js";
@@ -85,7 +89,11 @@ function tryDecode(buf: ArrayBuffer, charset: string): string | undefined {
   }
 }
 
-function pickCharset(response: Response, buf: ArrayBuffer, kind: BodyKind): string | undefined {
+function pickCharset(
+  response: UndiciResponse,
+  buf: ArrayBuffer,
+  kind: BodyKind,
+): string | undefined {
   const httpCharset = parseCharset(response.headers.get("content-type") ?? "");
   if (httpCharset) return httpCharset;
   if (kind === "html") return sniffHtmlMetaCharset(buf);
@@ -107,7 +115,7 @@ function tooLarge(streamed: boolean): Error {
 // is a fast-path rejection (saves a connection on honest servers); this
 // function is the actual enforcement — a server that omits or lies about
 // Content-Length still cannot OOM the agent process.
-async function readBoundedBody(response: Response): Promise<ArrayBuffer> {
+async function readBoundedBody(response: UndiciResponse): Promise<ArrayBuffer> {
   const reader = response.body?.getReader();
   if (!reader) {
     // No streaming body (synthetic Response constructed without a body
@@ -161,7 +169,7 @@ async function readBoundedBody(response: Response): Promise<ArrayBuffer> {
   return buf.buffer.slice(0, total);
 }
 
-async function decodeBody(response: Response, kind: BodyKind): Promise<string> {
+async function decodeBody(response: UndiciResponse, kind: BodyKind): Promise<string> {
   const buf = await readBoundedBody(response);
   const charset = pickCharset(response, buf, kind);
   if (charset) {
@@ -317,24 +325,39 @@ export function stripPaginationFooter(s: string): string {
 
 const MAX_REDIRECTS = 5;
 
+// The fetch implementation, resolved through a module-level binding so tests
+// can substitute it. Defaults to the *installed* undici's fetch — deliberately
+// not Node's global fetch. See lib/ssrf-agent.ts: routing both the fetch and
+// the dispatcher through one undici copy is what makes the SSRF connect-time
+// hook reliable across Node versions.
+let fetchImpl: typeof undiciFetch = undiciFetch;
+
+/**
+ * Test-only seam. Replaces the fetch used by `doFetch`; pass `null` to
+ * restore the real one. Not part of the public API.
+ *
+ * This exists because stubbing `global.fetch` no longer intercepts anything:
+ * `doFetch` calls undici's fetch directly, so a global stub would let the
+ * request escape to the network instead of failing loudly.
+ */
+export function __setFetchForTesting(fn: typeof undiciFetch | null): void {
+  fetchImpl = fn ?? undiciFetch;
+}
+
 // Single-hop fetch — does NOT follow redirects. Caller is responsible for
 // re-validating Location targets and looping. See fetchWithRedirects.
-async function doFetch(url: URL, userAgent: string): Promise<Response> {
-  // Typed against undici's own RequestInit (which declares `dispatcher`) so a
-  // future undici rename of the field surfaces as a type error here instead
-  // of a silent runtime no-op. See lib/ssrf-agent.ts for why this dispatcher
-  // exists. Tests that replace global.fetch wholesale bypass this dispatcher
-  // — the SSRF re-check guarantee only holds when undici's real fetch runs.
+async function doFetch(url: URL, userAgent: string): Promise<UndiciResponse> {
+  // `init` is typed against undici's own RequestInit, which declares
+  // `dispatcher`, so a future undici rename surfaces as a type error here
+  // rather than a silent runtime no-op. Since we now call undici's fetch
+  // directly this is a plain typed argument — no DOM/undici widening needed.
   const init = {
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     redirect: "manual" as const,
     headers: { "User-Agent": userAgent, Accept: ACCEPT_HEADER },
     dispatcher: getSsrfAgent(),
   } satisfies UndiciRequestInit;
-  // global fetch's lib.dom RequestInit type doesn't know about `dispatcher`,
-  // so the assignment is from a wider literal to a narrower DOM type. The
-  // extra `dispatcher` property is a runtime-honored undici extension.
-  return fetch(url, init);
+  return fetchImpl(url, init);
 }
 
 function isRedirect(status: number): boolean {
@@ -363,7 +386,7 @@ async function fetchWithRedirects(
   url: URL,
   userAgent: string,
   requireSameOriginAs?: string,
-): Promise<{ response: Response; finalUrl: URL }> {
+): Promise<{ response: UndiciResponse; finalUrl: URL }> {
   let current = url;
   for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
     const response = await doFetch(current, userAgent);
@@ -414,7 +437,7 @@ async function fetchWithRedirects(
 // Cancels the reader so the connection is released. Used by the CF
 // challenge sniff path — we only need the first ~few KB of HTML to decide,
 // and reading a multi-MB 403 body just to throw a moment later is wasteful.
-async function readBodyPrefix(response: Response, max: number): Promise<string> {
+async function readBodyPrefix(response: UndiciResponse, max: number): Promise<string> {
   // body is null for HEAD/204/205/304 responses; CF challenge sniff only
   // runs on status===403 GETs in practice, but guard anyway.
   const reader = response.body?.getReader();
@@ -548,7 +571,7 @@ export function parseRetryAfter(header: string | null): number | null {
   return null;
 }
 
-async function isCloudflareChallenge(response: Response): Promise<boolean> {
+async function isCloudflareChallenge(response: UndiciResponse): Promise<boolean> {
   if (response.headers.get("cf-mitigated") === "challenge") return true;
   if (response.status !== 403) return false;
   // Bounded prefix read instead of clone().text(): a multi-MB 403 used to
@@ -594,10 +617,10 @@ async function isCloudflareChallenge(response: Response): Promise<boolean> {
 // extractor and alternate-link path would do same-origin and relative-href
 // math against the stale pre-retry origin.
 async function maybeRetryAfter(
-  response: Response,
+  response: UndiciResponse,
   url: URL,
   ua: string,
-): Promise<{ response: Response; finalUrl: URL } | null> {
+): Promise<{ response: UndiciResponse; finalUrl: URL } | null> {
   if (response.status !== 429 && response.status !== 503) return null;
   const waitMs = parseRetryAfter(response.headers.get("retry-after"));
   if (waitMs === null) return null;
@@ -974,7 +997,7 @@ async function tryFollowAlternate(html: string, pageUrl: URL, ua: string): Promi
     // to an attacker origin would be followed.
     if (altUrl.origin !== pageOrigin) continue;
 
-    let altResponse: Response;
+    let altResponse: UndiciResponse;
     try {
       // Discard finalUrl on the alternate path: alternates are leaf
       // fetches — we format the body and return, no further URL math
@@ -1006,7 +1029,7 @@ async function tryFollowAlternate(html: string, pageUrl: URL, ua: string): Promi
 // fallbacks. PDF and binary types are also rejected here for the same reason
 // — an alternate that claimed `application/json+oembed` and served PDF is
 // either misbehaving or hostile; bail out and let the caller fall back.
-async function formatAlternateBody(response: Response): Promise<string | null> {
+async function formatAlternateBody(response: UndiciResponse): Promise<string | null> {
   // Cancel the body on every early return so an unwanted alternate (e.g.
   // application/pdf served against an oEmbed-typed link) doesn't leak the
   // socket. Mirrors the 4xx branch in tryFollowAlternate.

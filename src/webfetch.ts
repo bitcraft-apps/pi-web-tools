@@ -1335,8 +1335,27 @@ export function formatWebfetchResult(
 export const webfetchTool = defineTool<typeof webfetchSchema, WebfetchToolDetails>({
   name: "webfetch",
   label: "Web Fetch",
+  // The description states capabilities and limits; behavioural advice lives
+  // in `promptGuidelines` below. Keep it self-contained rather than deferring
+  // to the guidelines: guidelines are appended to pi's *default* system
+  // prompt, so a host that supplies its own prompt sees only this string.
   description:
-    "Fetch a URL and return its main text content as markdown. HTML is converted via pandoc or w3m. If `trafilatura` or `rdrview` is on $PATH, runs a Reader-View-style extraction pre-pass to strip page chrome (nav/sidebar/footer), typically shrinking output 5–20× on chrome-heavy pages. Falls back transparently to the full page if no extractor is installed or extraction looks wrong. Use after `websearch` to read full content of a result, or directly when user gives you a URL. For documents larger than `max_chars`, re-call with the `offset` value reported in the truncation footer to read the next chunk (no cache — each paginated call re-fetches and re-extracts; PDFs re-spawn pdftotext on every call, so prefer one large `max_chars` over multiple paginated reads). Cannot fetch binary content (PDF, images). Cannot reach localhost or RFC1918 link-local addresses.",
+    "Fetch a URL and return its main text content as markdown. HTML is converted via pandoc or w3m. If `trafilatura` or `rdrview` is on $PATH, runs a Reader-View-style extraction pre-pass to strip page chrome (nav/sidebar/footer), typically shrinking output 5–20× on chrome-heavy pages. Falls back transparently to the full page if no extractor is installed or extraction looks wrong. PDFs are supported when `pdftotext` (poppler) is on $PATH — text-layer only, so scanned PDFs return little or nothing — and are rejected when it is not installed. For documents larger than `max_chars`, re-call with the `offset` value reported in the truncation footer to read the next chunk. Cannot fetch images or other binary content. Cannot reach localhost or RFC1918 link-local addresses.",
+  // Without this, pi omits custom tools from the "Available tools" section of
+  // the default system prompt entirely — the tool is callable but never
+  // advertised alongside the built-ins. One line, matching their phrasing.
+  promptSnippet: "Fetch a URL and read its main content as markdown (HTML and PDF)",
+  // Cost-shaped advice rather than capability, so it belongs here instead of
+  // in the description: pagination is supported, it is just the expensive way
+  // to read a document.
+  promptGuidelines: [
+    "`webfetch` has no cache: every paginated call re-fetches and re-extracts the whole document, and PDFs re-run pdftotext each time. Prefer a single call with a large `max_chars` over several `offset` reads.",
+    "Use `webfetch` after `websearch` to read a promising result in full, or directly when the user supplies a URL.",
+  ],
+  // Ask the provider to constrain sampling to the parameter schema where it
+  // can. "prefer" rather than "require" so providers without the capability
+  // keep working unchanged — this is a reliability nudge, not a dependency.
+  constrainedSampling: { type: "json_schema", strict: "prefer" },
   parameters: webfetchSchema,
   async execute(_id, params, _signal, _onUpdate, _ctx) {
     // Structural pass-through (not a cast): listing each field makes the

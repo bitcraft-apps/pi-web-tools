@@ -255,8 +255,17 @@ export function formatWebsearchResult(
 export const websearchTool = defineTool<typeof websearchSchema, WebsearchToolDetails>({
   name: "websearch",
   label: "Web Search",
+  // Self-contained by design — see the note on webfetch's description.
   description:
     "Search the web via DuckDuckGo. Returns up to N results with title, URL and short snippet. Use when you need current information from the internet that isn't in your training data, or to find URLs to fetch with `webfetch`.",
+  // See webfetch: without a snippet, pi leaves custom tools out of the
+  // "Available tools" section of the default system prompt.
+  promptSnippet: "Search the web via DuckDuckGo for current information",
+  promptGuidelines: [
+    "`websearch` returns titles, URLs and short snippets only. Snippets are search-engine summaries, not page content — follow up with `webfetch` before relying on what a result says.",
+  ],
+  // See webfetch for the "prefer" rationale.
+  constrainedSampling: { type: "json_schema", strict: "prefer" },
   parameters: websearchSchema,
   async execute(_id, params, _signal, _onUpdate, _ctx) {
     const limit = Math.min(Math.max(1, params.limit ?? LIMIT_DEFAULT), LIMIT_MAX);

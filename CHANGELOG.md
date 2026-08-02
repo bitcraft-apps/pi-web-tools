@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.3](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.3.2...v1.3.3) (2026-08-02)
+
+
+### Bug Fixes
+
+* **webfetch:** call undici's own fetch instead of Node's global ([#177](https://github.com/bitcraft-apps/pi-web-tools/issues/177)) ([356cb11](https://github.com/bitcraft-apps/pi-web-tools/commit/356cb117f0173aaf8dbd855ffa5c394c6d4a9c61))
+
 ## [1.3.2](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.3.1...v1.3.2) (2026-08-02)
 
 

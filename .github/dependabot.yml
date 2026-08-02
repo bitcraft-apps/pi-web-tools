@@ -50,14 +50,6 @@ updates:
       # break that invariant and turn the drift check red for no reason.
       # scripts/metrics.sh owns this pin instead. See #163, #164.
       - dependency-name: "typebox"
-      # undici majors are a compatibility ceiling, not lag. 7.x is the only
-      # major whose Agent is accepted by the undici that Node bundles across
-      # 22, 24 and 26; ^8 breaks Node 22 and 24. Patches and minors within 7.x
-      # are wanted — this is the library doing our network I/O, so security
-      # fixes should still flow. Only the major is blocked.
-      # See the measured matrix in src/lib/ssrf-agent.ts and #166.
-      - dependency-name: "undici"
-        update-types: ["version-update:semver-major"]
       # @types/node tracks the `engines.node` floor (>=22), not npm latest.
       # Types describing a newer Node than we support would let tsgo accept
       # APIs missing on the oldest runtime we claim to run on, and the

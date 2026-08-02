@@ -18,7 +18,7 @@ import {
   MAX_RESPONSE_BYTES,
   OPENCODE_UA,
 } from "./lib/headers.js";
-import { defineTool, keyHint } from "@earendil-works/pi-coding-agent";
+import { defineTool, formatSize, keyHint } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { ensureText, type FormatterTheme } from "./lib/render.js";
 
@@ -1177,20 +1177,6 @@ export const WEBFETCH_PREVIEW_MAX_LINES = 200;
  * … — the model still received the full content, see footer.
  */
 export const WEBFETCH_PREVIEW_MAX_LINE_CHARS = 500;
-
-/**
- * Format a byte count using the same B/KB/MB convention as the
- * built-in `read` tool's `formatSize` (see
- * `node_modules/@earendil-works/pi-coding-agent/dist/core/tools/truncate.js`).
- * Inlined rather than imported because that module is not part of the
- * package's public export surface — importing through `dist/...` would
- * couple us to internal layout.
- */
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-}
 
 /**
  * Compact display form of `url` for the collapsed result header:

@@ -38,13 +38,20 @@
 //   global fetch + installed 6      ok              ok        invalid onError
 //   global fetch + installed 7      ok              ok              ok
 //   global fetch + installed 8  invalid onReqStart  invalid onReqStart   ok
-//   same-copy undici fetch          ok              ok              ok
+//   same-copy undici fetch, 6       ok              ok              ok
+//   same-copy undici fetch, 7       ok              ok              ok
+//   same-copy undici fetch, 8       ok              ok              ok
 //
-// The bottom row is why this package uses undici's own fetch: it is the only
-// arrangement that works for every combination, so no version pairing can
-// silently or loudly break the connect-time SSRF hook. `engines.node >= 22`
-// spans all three columns, and the global-fetch route has no undici major that
-// covers them all except 7 — a bridge that will not last forever.
+// The bottom three rows are why this package uses undici's own fetch: every
+// installed major works on every supported Node, so no version pairing can
+// silently or loudly break the connect-time SSRF hook. The global-fetch route
+// has no undici major covering all three columns except 7 — a bridge that will
+// not last forever.
+//
+// Those rows are also what `dependencies.undici` rests on: the declared range
+// is `^6 || ^7 || ^8` because all nine cells were measured green (full suite
+// plus the four rebinding tests below, re-run under each pairing, 2026-08-02).
+// Widening to a future major means re-running that matrix, not assuming it.
 //
 // The regression guard is the "DNS-rebinding guard" block in
 // test/webfetch.test.ts: it wraps `lookupHook` in a `vi.fn()` and asserts

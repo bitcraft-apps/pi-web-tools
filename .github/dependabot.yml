@@ -58,6 +58,13 @@ updates:
       # See the measured matrix in src/lib/ssrf-agent.ts and #166.
       - dependency-name: "undici"
         update-types: ["version-update:semver-major"]
+      # @types/node tracks the `engines.node` floor (>=22), not npm latest.
+      # Types describing a newer Node than we support would let tsgo accept
+      # APIs missing on the oldest runtime we claim to run on, and the
+      # node-matrix job only catches that if a test happens to exercise them.
+      # Bump this deliberately, in the same PR that raises `engines`.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       # oxfmt is pre-1.0 and its output is not stable across versions, so every
       # bump reformats the world and needs a .git-blame-ignore-revs follow-up
@@ -75,6 +82,15 @@ updates:
       tsgo:
         patterns:
           - "@typescript/native-preview"
+      # vitest gets its own group so a framework major always arrives alone.
+      # Grouped with everything else it took an innocuous @types/node bump down
+      # with it: 8 failures, all from vitest 4 spy/mock lifecycle changes, on a
+      # PR whose title said "2 updates" (#185). A major that needs a migration
+      # should be a PR where the failures are the subject.
+      vitest:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
       dev-dependencies:
         patterns:
           - "*"
@@ -83,3 +99,5 @@ updates:
           - "oxlint-tsgolint"
           - "oxfmt"
           - "@typescript/native-preview"
+          - "vitest"
+          - "@vitest/*"

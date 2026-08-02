@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Agent } from "undici";
 import { __setSsrfAgentForTesting, lookupHook } from "../src/lib/ssrf-agent.js";
+import { restoreFetch, stubFetch } from "./_helpers/fetch.js";
+import { fetch as undiciFetch } from "undici";
 import { stubExtensionContext } from "./_helpers/context.js";
 import { mockDnsLookup } from "./_helpers/dns.js";
 
@@ -48,10 +50,11 @@ function mockFetchOnce(opts: {
   // SharedArrayBuffer), which `BodyInit` rejects. The copy is cheap and
   // semantically identical for these tests.
   const responseBody: BodyInit = typeof body === "string" ? body : new Uint8Array(body);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockResolvedValueOnce(new Response(responseBody, { status, headers })),
-  );
+  // Returned so callers can assert on calls/args. `fetch` is no longer a
+  // global stub, so `vi.mocked(fetch)` would inspect the wrong function.
+  const mock = vi.fn().mockResolvedValueOnce(new Response(responseBody, { status, headers }));
+  stubFetch(mock);
+  return mock;
 }
 
 beforeEach(() => {
@@ -66,6 +69,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restoreFetch();
   vi.unstubAllGlobals();
 });
 
@@ -161,7 +165,7 @@ describe("fetchAsMarkdown", () => {
           headers: new Headers({ "content-type": "application/json" }),
         }),
       );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const md = await fetchAsMarkdown({ url: "https://a.example", max_chars: 200 });
     expect(md).toMatch(/^\[REDIRECTED/);
@@ -269,9 +273,8 @@ describe("fetchAsMarkdown", () => {
   });
 
   it("sends the markdown-preferring Accept header on every request", async () => {
-    mockFetchOnce({ body: "<h1>Hi</h1>" });
+    const fetchMock = mockFetchOnce({ body: "<h1>Hi</h1>" });
     await fetchAsMarkdown({ url: "https://example.com" });
-    const fetchMock = vi.mocked(fetch);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const init = fetchMock.mock.calls[0]![1]!;
     const headers = new Headers(init.headers);
@@ -549,8 +552,7 @@ describe("fetchAsMarkdown", () => {
     });
 
   it("rejects response > 5MB when Content-Length is missing (chunked)", async () => {
-    vi.stubGlobal(
-      "fetch",
+    stubFetch(
       vi.fn().mockResolvedValueOnce(
         new Response(makeOversizeStream(), {
           status: 200,
@@ -563,8 +565,7 @@ describe("fetchAsMarkdown", () => {
   });
 
   it("rejects response > 5MB when Content-Length lies (says 1 KB, sends >5 MB)", async () => {
-    vi.stubGlobal(
-      "fetch",
+    stubFetch(
       vi.fn().mockResolvedValueOnce(
         new Response(makeOversizeStream(), {
           status: 200,
@@ -588,8 +589,7 @@ describe("fetchAsMarkdown", () => {
         controller.close();
       },
     });
-    vi.stubGlobal(
-      "fetch",
+    stubFetch(
       vi.fn().mockResolvedValueOnce(
         new Response(stream, {
           status: 200,
@@ -706,9 +706,8 @@ describe("thin-extraction <link rel=alternate> fallback (issue #128)", () => {
 
   // Sequence-aware fetch mock: pop a Response per call. Distinct from
   // mockFetchOnce because the alternate path issues two HTTP fetches.
-  // No per-call cleanup needed: the file-level afterEach
-  // (`vi.unstubAllGlobals()`) restores `fetch` between tests, so a leaked
-  // sequence here can't reach the next test.
+  // No per-call cleanup needed: the file-level afterEach calls
+  // `restoreFetch()`, so a leaked sequence here can't reach the next test.
   function mockFetchSequence(
     responses: Array<{
       status?: number;
@@ -723,7 +722,7 @@ describe("thin-extraction <link rel=alternate> fallback (issue #128)", () => {
       const responseBody: BodyInit = typeof body === "string" ? body : new Uint8Array(body);
       fn.mockResolvedValueOnce(new Response(responseBody, { status: r.status ?? 200, headers }));
     }
-    vi.stubGlobal("fetch", fn);
+    stubFetch(fn);
     return fn;
   }
 
@@ -1192,7 +1191,7 @@ describe("Cloudflare retry hack", () => {
         new Response("<html>blocked</html>", { status: 200, headers: cfHeaders }),
       )
       .mockResolvedValueOnce(new Response("<h1>OK</h1>", { status: 200, headers: okHeaders }));
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const md = await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(2);
@@ -1209,7 +1208,7 @@ describe("Cloudflare retry hack", () => {
         new Response("<html>Just a moment...</html>", { status: 403, headers }),
       )
       .mockResolvedValueOnce(new Response("<h1>OK</h1>", { status: 200, headers }));
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(2);
@@ -1220,7 +1219,7 @@ describe("Cloudflare retry hack", () => {
     const mock = vi
       .fn()
       .mockResolvedValue(new Response("<html>blocked</html>", { status: 200, headers: cfHeaders }));
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
       /JS|cannot fetch/i,
@@ -1246,7 +1245,7 @@ describe("Cloudflare retry hack", () => {
           headers: new Headers({ "content-type": "text/html" }),
         }),
       );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(2);
@@ -1262,7 +1261,7 @@ describe("Cloudflare retry hack", () => {
         headers: new Headers({ "content-type": "text/html" }),
       }),
     );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     // Falls through to the regular 403 throw path — no retry attempted.
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
@@ -1276,7 +1275,7 @@ describe("Cloudflare retry hack", () => {
         headers: new Headers({ "content-type": "text/html" }),
       }),
     );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
     expect(mock).toHaveBeenCalledTimes(1);
@@ -1299,7 +1298,7 @@ describe("Cloudflare retry hack", () => {
           headers: new Headers({ "content-type": "text/html" }),
         }),
       );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(2);
@@ -1319,7 +1318,7 @@ describe("Cloudflare retry hack", () => {
       .mockResolvedValueOnce(
         new Response(html, { status: 403, headers: new Headers({ "content-type": "text/html" }) }),
       );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 403/);
     expect(mock).toHaveBeenCalledTimes(1);
@@ -1344,8 +1343,7 @@ describe("Cloudflare retry hack", () => {
         enqueued++;
       },
     });
-    vi.stubGlobal(
-      "fetch",
+    stubFetch(
       vi.fn().mockResolvedValueOnce(
         new Response(stream, {
           status: 403,
@@ -1504,7 +1502,7 @@ function redirectResponse(location: string, status = 302): Response {
 }
 
 describe("redirect re-validation (issue #57)", () => {
-  // Per-test fetch stubs are restored by the top-level `vi.unstubAllGlobals()`
+  // Per-test fetch stubs are restored by the top-level `restoreFetch()`
   // afterEach; no per-describe save/restore needed.
 
   it("follows a redirect that stays on a public host", async () => {
@@ -1517,7 +1515,7 @@ describe("redirect re-validation (issue #57)", () => {
           headers: new Headers({ "content-type": "text/html" }),
         }),
       );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const md = await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(2);
@@ -1526,7 +1524,7 @@ describe("redirect re-validation (issue #57)", () => {
 
   it("throws when 302 points at loopback", async () => {
     const mock = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1/admin"));
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
     expect(mock).toHaveBeenCalledTimes(1);
@@ -1536,7 +1534,7 @@ describe("redirect re-validation (issue #57)", () => {
     const mock = vi
       .fn()
       .mockResolvedValueOnce(redirectResponse("http://169.254.169.254/latest/meta-data/"));
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
   });
@@ -1548,7 +1546,7 @@ describe("redirect re-validation (issue #57)", () => {
 
   it("throws when 302 points at localhost by name", async () => {
     const mock = vi.fn().mockResolvedValueOnce(redirectResponse("http://localhost:3000/admin"));
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
   });
@@ -1566,7 +1564,7 @@ describe("redirect re-validation (issue #57)", () => {
           headers: new Headers({ "content-type": "text/html" }),
         }),
       );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await fetchAsMarkdown({ url: "https://example.com/page" });
     expect(mock).toHaveBeenCalledTimes(2);
@@ -1583,7 +1581,7 @@ describe("redirect re-validation (issue #57)", () => {
       // swap these for sub-labels of example.com (which IS reserved).
       return redirectResponse(`https://example${i++}.com/`);
     });
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
       /too many redirects/i,
@@ -1600,7 +1598,7 @@ describe("redirect re-validation (issue #57)", () => {
         headers: new Headers({ "content-type": "text/html" }),
       }),
     );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await fetchAsMarkdown({ url: "https://example.com" });
     expect(mock).toHaveBeenCalledTimes(1);
@@ -1639,27 +1637,22 @@ function blockedCause(err: unknown): string {
 }
 
 describe("DNS-rebinding guard (issue #64)", () => {
-  // These tests do NOT mock global.fetch — we need the real undici fetch to
-  // run so it goes through ssrfAgent's lookup hook. dns.lookup is stubbed so
-  // no actual network traffic happens (the lookup fails with EBLOCKED before
-  // any TCP connect is attempted).
+  // These tests do NOT install a fetch fake — we need the real undici fetch
+  // to run so it goes through ssrfAgent's lookup hook. dns.lookup is stubbed
+  // so no actual network traffic happens (the lookup fails with EBLOCKED
+  // before any TCP connect is attempted).
   //
   // We install a fresh Agent built around a `vi.fn()`-wrapped `lookupHook`
-  // (`hookSpy`) before each test and assert it was actually invoked. This is
-  // the only thing that proves Node's bundled fetch honored our `dispatcher:`
-  // option — if a future undici dual-copy drift caused the dispatcher to be
-  // silently dropped, dns.lookup would still get called by undici's default
-  // connector, the request would still fail (because we stub dns to a blocked
-  // address), but `hookSpy` would have zero calls. See ssrf-agent.ts header.
-  // Saved before any test mocks `global.fetch` so the rebind-redirect test
-  // below can forward hop 2 to the real undici fetch (so ssrfAgent's lookup
-  // hook actually runs and we exercise the connect-time recheck).
+  // (`hookSpy`) before each test and assert it was actually invoked. That
+  // assertion is what proves the `dispatcher:` option was honored: if it were
+  // ever dropped, dns.lookup would still be called by undici's default
+  // connector and the request would still fail (we stub dns to a blocked
+  // address), but `hookSpy` would show zero calls.
   //
-  // We do NOT need this for restoration: the top-level `vi.unstubAllGlobals()`
-  // afterEach already restores `global.fetch` between tests, and
-  // `vi.stubGlobal` snapshots the pre-stub value internally. This binding
-  // exists solely to forward hop 2.
-  const originalFetch = global.fetch;
+  // Since webfetch and the Agent now come from the same undici copy, the
+  // cross-copy mismatch this originally guarded against cannot occur — but
+  // the assertion is kept: it is cheap, and it still catches the dispatcher
+  // being dropped for any other reason. See ssrf-agent.ts header.
   let hookSpy: ReturnType<typeof vi.fn<typeof lookupHook>>;
   beforeEach(() => {
     hookSpy = vi.fn<typeof lookupHook>(lookupHook);
@@ -1717,17 +1710,13 @@ describe("DNS-rebinding guard (issue #64)", () => {
   });
 
   it("blocks a redirect target whose hostname rebinds to private", async () => {
-    // Two-stage attack: hop 1 is mocked at the global.fetch level (so we
-    // don't depend on a real public server existing); hop 2 is a public
-    // name that DNS-resolves to RFC1918. The redirect URL passes
-    // validateUrl (string looks public), but the connect-time lookup must
-    // reject it.
+    // Two-stage attack: hop 1 is faked through the fetch seam (so we don't
+    // depend on a real public server existing); hop 2 is a public name that
+    // DNS-resolves to RFC1918. The redirect URL passes validateUrl (string
+    // looks public), but the connect-time lookup must reject it.
     stubDns("10.0.0.1", 4);
     let calls = 0;
-    vi.stubGlobal("fetch", ((
-      url: Parameters<typeof fetch>[0],
-      init?: Parameters<typeof fetch>[1],
-    ) => {
+    stubFetch((...args) => {
       calls++;
       if (calls === 1) {
         return Promise.resolve(
@@ -1737,9 +1726,10 @@ describe("DNS-rebinding guard (issue #64)", () => {
           }),
         );
       }
-      // Hand off to real undici fetch for hop 2 so ssrfAgent.lookup runs.
-      return originalFetch(url, init);
-    }) satisfies typeof fetch);
+      // Hand hop 2 to the real undici fetch so ssrfAgent's lookup hook runs
+      // and the connect-time re-check is genuinely exercised.
+      return undiciFetch(...args);
+    });
 
     const err = await fetchAsMarkdown({ url: "https://example.com" }).then(
       () => null,
@@ -1822,7 +1812,7 @@ describe("Retry-After honoring (issue #121)", () => {
           headers: new Headers({ "content-type": "text/html" }),
         }),
       );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const promise = fetchAsMarkdown({ url: "https://example.com" });
     // Drain microtasks so the first response is observed and the sleep starts,
@@ -1849,7 +1839,7 @@ describe("Retry-After honoring (issue #121)", () => {
           headers: new Headers({ "content-type": "text/html" }),
         }),
       );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const promise = fetchAsMarkdown({ url: "https://example.com" });
     await vi.advanceTimersByTimeAsync(2_000);
@@ -1868,7 +1858,7 @@ describe("Retry-After honoring (issue #121)", () => {
         }),
       }),
     );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 503/);
     expect(mock).toHaveBeenCalledTimes(1);
@@ -1881,7 +1871,7 @@ describe("Retry-After honoring (issue #121)", () => {
         headers: new Headers({ "content-type": "text/plain" }),
       }),
     );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 429/);
     expect(mock).toHaveBeenCalledTimes(1);
@@ -1894,7 +1884,7 @@ describe("Retry-After honoring (issue #121)", () => {
         headers: new Headers({ "content-type": "text/plain", "retry-after": "soon" }),
       }),
     );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/HTTP 429/);
     expect(mock).toHaveBeenCalledTimes(1);
@@ -1910,7 +1900,7 @@ describe("Retry-After honoring (issue #121)", () => {
       .mockResolvedValueOnce(
         new Response("slow down", { status: 429, headers: new Headers(headers429) }),
       );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const promise = fetchAsMarkdown({ url: "https://example.com" });
     // Surface the rejection to the test runner so an unhandled rejection from
@@ -1931,7 +1921,7 @@ describe("Retry-After honoring (issue #121)", () => {
           headers: new Headers({ "content-type": "text/plain", "retry-after": "1" }),
         }),
       );
-      vi.stubGlobal("fetch", mock);
+      stubFetch(mock);
       await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
         new RegExp(`HTTP ${status}`),
       );
@@ -1959,7 +1949,7 @@ describe("Retry-After honoring (issue #121)", () => {
           headers: new Headers({ "content-type": "text/html" }),
         }),
       );
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const promise = fetchAsMarkdown({ url: "https://example.com" });
     await vi.advanceTimersByTimeAsync(2_000);
@@ -2127,7 +2117,7 @@ describe("cross-host redirect notice (issue #133)", () => {
       .fn()
       .mockResolvedValueOnce(redirectResponse("https://dotnet.microsoft.com/en-us/download", 301))
       .mockResolvedValueOnce(htmlOk("<h1>Download .NET</h1>"));
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const md = await fetchAsMarkdown({ url: "https://aka.ms/dotnet" });
     // First line is the marker; the body follows after a blank line.
@@ -2139,7 +2129,7 @@ describe("cross-host redirect notice (issue #133)", () => {
 
   it("does not prepend a notice when no redirect occurred", async () => {
     const mock = vi.fn().mockResolvedValueOnce(htmlOk("<h1>OK</h1>"));
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const md = await fetchAsMarkdown({ url: "https://example.com/page" });
     expect(md).not.toMatch(/^\[REDIRECTED/);
@@ -2151,7 +2141,7 @@ describe("cross-host redirect notice (issue #133)", () => {
       .fn()
       .mockResolvedValueOnce(redirectResponse("https://example.com/new", 301))
       .mockResolvedValueOnce(htmlOk("<h1>OK</h1>"));
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const md = await fetchAsMarkdown({ url: "https://example.com/old" });
     expect(md).not.toMatch(/^\[REDIRECTED/);
@@ -2165,7 +2155,7 @@ describe("cross-host redirect notice (issue #133)", () => {
       .mockResolvedValueOnce(redirectResponse("https://other.example/bounce", 302))
       .mockResolvedValueOnce(redirectResponse("https://example.com/landing", 302))
       .mockResolvedValueOnce(htmlOk("<h1>OK</h1>"));
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const md = await fetchAsMarkdown({ url: "https://example.com" });
     expect(md).not.toMatch(/^\[REDIRECTED/);
@@ -2177,7 +2167,7 @@ describe("cross-host redirect notice (issue #133)", () => {
       .fn()
       .mockResolvedValueOnce(redirectResponse("https://www.example.com/", 301))
       .mockResolvedValueOnce(htmlOk("<h1>Hi</h1>"));
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const md = await fetchAsMarkdown({ url: "https://example.com" });
     expect(md.split("\n")[0]).toBe(
@@ -2193,7 +2183,7 @@ describe("cross-host redirect notice (issue #133)", () => {
       .fn()
       .mockResolvedValueOnce(redirectResponse("https://user:s3cret@evil.example/path", 302))
       .mockResolvedValueOnce(htmlOk("<h1>Hi</h1>"));
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const md = await fetchAsMarkdown({ url: "https://example.com" });
     const first = md.split("\n")[0];
@@ -2211,7 +2201,7 @@ describe("cross-host redirect notice (issue #133)", () => {
       .fn()
       .mockResolvedValueOnce(redirectResponse("https://example.com/", 301))
       .mockResolvedValueOnce(htmlOk("<h1>OK</h1>"));
-    vi.stubGlobal("fetch", mock);
+    stubFetch(mock);
 
     const md = await fetchAsMarkdown({ url: "http://example.com/" });
     expect(md).not.toMatch(/^\[REDIRECTED/);

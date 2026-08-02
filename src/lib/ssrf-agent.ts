@@ -22,50 +22,38 @@
 // `validateUrl` already rejects literals in the blocked ranges before we
 // ever call fetch.
 //
-// KNOWN CONSTRAINT — undici dual-copy compatibility
-// --------------------------------------------------
-// Node ships its own bundled copy of undici behind global `fetch`. We hand
-// that global fetch a `dispatcher:` built from the *installed* undici
-// (`dependencies` in package.json), so two undici copies meet at one
-// interface. They are not universally compatible: undici 8 reworked the
-// dispatcher handler API, and each side rejects the other's shape.
+// WHY WEBFETCH DOES NOT USE GLOBAL `fetch`
+// -----------------------------------------
+// `webfetch.ts` calls the *installed* undici's `fetch`, not Node's global one,
+// so the fetch and this Agent always come from the same undici copy. That is
+// deliberate and load-bearing, not stylistic.
 //
-// Measured 2026-08-02 (see issue #166). "ok" = lookup hook fired and the
-// request completed; anything else is the thrown error:
+// Node ships its own bundled undici behind global `fetch`. Handing that global
+// fetch a `dispatcher:` from a *different* undici copy only works for some
+// version pairs — undici 8 reworked the dispatcher handler API, so each side
+// rejects the other's shape. Measured 2026-08-02, "ok" = lookup hook fired and
+// the request completed (see #166):
 //
-//                   Node 22 (bundles 6.28)   Node 24 (7.18)   Node 26 (8.9)
-//   installed 6            ok                     ok          invalid onError
-//   installed 7            ok                     ok               ok
-//   installed 8     invalid onRequestStart  invalid onRequestStart  ok
+//                     Node 22 (bundles 6.28)  Node 24 (7.18)   Node 26 (8.9)
+//   global fetch + installed 6      ok              ok        invalid onError
+//   global fetch + installed 7      ok              ok              ok
+//   global fetch + installed 8  invalid onReqStart  invalid onReqStart   ok
+//   same-copy undici fetch          ok              ok              ok
 //
-// `engines.node >= 22` spans all three rows, and undici 7 is the only major
-// compatible with every one. Hence `dependencies.undici` = `^6.0.0 ||
-// ^7.0.0`: npm installs the highest satisfying version, that is 7.x, and 7.x
-// is the bridge.
+// The bottom row is why this package uses undici's own fetch: it is the only
+// arrangement that works for every combination, so no version pairing can
+// silently or loudly break the connect-time SSRF hook. `engines.node >= 22`
+// spans all three columns, and the global-fetch route has no undici major that
+// covers them all except 7 — a bridge that will not last forever.
 //
-//   DO NOT widen this to `^8`. npm would install 8.x and break Node 22 and
-//   Node 24 — most installs. Widening looks like "support the newest Node"
-//   but does the opposite.
+// The regression guard is the "DNS-rebinding guard" block in
+// test/webfetch.test.ts: it wraps `lookupHook` in a `vi.fn()` and asserts
+// `toHaveBeenCalled()`, which fails if the dispatcher is ever dropped. CI runs
+// it on Node 22, 24 and 26 (`node-matrix` in .github/workflows/ci.yml).
 //
-// (An earlier revision of this comment claimed npm resolves "the major
-// closest to the host Node". It does not — npm takes the highest satisfying
-// version regardless of host. The range works because that version is 7.)
-//
-// Mismatches fail loudly, not silently: every incompatible pair above throws
-// at fetch time rather than quietly dropping the dispatcher and re-opening
-// the SSRF hole. The regression guard is the "DNS-rebinding guard" block in
-// test/webfetch.test.ts, which wraps `lookupHook` in a `vi.fn()` and asserts
-// `toHaveBeenCalled()`. It has teeth: forcing undici 8 under Node 24 fails
-// all four cases with "expected lookupHook to be called at least once".
-// CI runs that guard on Node 22, 24 and 26 (`node-matrix` job in
-// .github/workflows/ci.yml), so a bad pairing surfaces on the PR that
-// introduces it rather than in the field.
-//
-// Revisit when: `engines.node` changes, Node drops undici 7 compatibility,
-// or you want the hazard gone entirely — importing `fetch` from the same
-// installed undici instead of using global fetch passes all nine
-// combinations, at the cost of reworking every test that stubs
-// `global.fetch`.
+// Practical consequence: stubbing `global.fetch` in a test does NOT intercept
+// webfetch any more. Use the `__setFetchForTesting` seam (test/_helpers/fetch.ts)
+// — a global stub would let the request escape to the real network.
 
 import dns from "node:dns";
 import net from "node:net";
@@ -146,8 +134,8 @@ export function ssrfLookup(
 // Match net.LookupFunction shape so undici/net call us with a single concrete
 // signature; we then forward into ssrfLookup which uses the same type.
 // Exported so tests can wrap it in a `vi.fn()` and assert the dispatcher
-// actually routed traffic through us (proves Node's bundled fetch did not
-// silently drop the `dispatcher:` option — see dual-copy note above).
+// actually routed traffic through us — i.e. that the `dispatcher:` option was
+// honored and the connect-time check really ran. See the header note.
 export const lookupHook: net.LookupFunction = (hostname, options, callback) => {
   ssrfLookup(hostname, options, callback);
 };

@@ -60,25 +60,33 @@ jobs:
       - run: bun run test
 
   # The `checks` job above runs the suite on whatever Node the runner image
-  # happens to ship — unpinned, and only ever one version. That is not good
-  # enough for one gate in particular: webfetch hands an Agent from the
-  # *installed* undici to Node's *bundled* undici behind global fetch, and
-  # those two copies are only compatible for some version pairs (matrix in
-  # src/lib/ssrf-agent.ts). An incompatible pair disables the SSRF
-  # DNS-rebinding guard, so it has to be exercised on every Node that
-  # `engines.node` claims to support. See #166.
+  # happens to ship — unpinned, one version, and one undici (the lockfile's).
+  # That is not good enough for one gate in particular: the connect-time SSRF
+  # DNS-rebinding guard passes an Agent to undici's fetch, and whether that
+  # Agent is honored depends on the undici/Node pairing (matrix in
+  # src/lib/ssrf-agent.ts). A bad pair disables the guard, so every pairing
+  # this package *claims* to support has to be exercised. See #166.
+  #
+  # Both dimensions come from a declared support surface, so both are tested:
+  # `node` mirrors `engines.node`, `undici` mirrors the `dependencies.undici`
+  # range. Consumers pick their own point in that grid — the lockfile pins one
+  # cell and proves nothing about the other eight.
   node-matrix:
-    name: node ${{ matrix.node }}
+    name: node ${{ matrix.node }} / undici ${{ matrix.undici }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
-      # Report every broken Node, not just the first — which one fails is the
-      # diagnostic signal here.
+      # Report every broken cell, not just the first — which pairing fails is
+      # the diagnostic signal here.
       fail-fast: false
       matrix:
         # Mirrors engines.node (>=22): the majors in support as of 2026-08.
         # Add the next major when it ships; drop one when it goes EOL.
         node: ["22", "24", "26"]
+        # Mirrors the major boundaries of `dependencies.undici`. Keep these two
+        # in sync: widening the range without adding its major here leaves the
+        # new major untested, which is how the pre-#166 gap opened.
+        undici: ["6", "7", "8"]
     steps:
       # SHA-pinned to match the `checks` job above.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -96,6 +104,24 @@ jobs:
           node-version: ${{ matrix.node }}
 
       - run: bun install --frozen-lockfile
+
+      # Override the lockfile's undici with the major under test. Done after
+      # the frozen install so everything *else* stays lockfile-exact and this
+      # is the only variable. `--no-save` keeps package.json/bun.lock clean, so
+      # a stray `git diff` in a later step can't be blamed on this step.
+      - run: bun add --no-save undici@${{ matrix.undici }}
+
+      # Fail loudly if the override didn't take: a silently-unchanged undici
+      # would turn eight of the nine cells into duplicates of the lockfile one
+      # and report a green matrix that tested nothing.
+      - name: Verify undici major under test
+        run: |
+          actual="$(node -p "require('undici/package.json').version")"
+          echo "undici=$actual (want major ${{ matrix.undici }})"
+          case "$actual" in
+            ${{ matrix.undici }}.*) ;;
+            *) echo "::error::expected undici ${{ matrix.undici }}.x, got $actual"; exit 1 ;;
+          esac
 
       # Whole suite rather than a `-t` filter on the guard's describe block:
       # a filter that stops matching after a rename would skip silently and

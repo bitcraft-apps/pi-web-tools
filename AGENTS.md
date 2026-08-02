@@ -97,3 +97,10 @@ that the loader overhead is obviously worth paying.
 - **Job `name:`:** omit unless it adds info beyond the ID. It adds info when the ID alone is ambiguous, e.g. matrix legs: `name: node ${{ matrix.node }}`.
 
 Rationale: the workflow/job ID is what appears in PR required-status-check config and failure notifications, so it must match the filename and be greppable.
+
+## Writing style
+
+English prose — docs, code comments, commit and PR text, issues, user-visible strings —
+follows [Simplified Technical English](https://www.asd-ste100.org/) (ASD-STE100): one
+meaning per word, active voice, imperative for instructions, simple tenses, one
+instruction per sentence (max 20 words), no jargon or metaphor. Code identifiers are exempt.

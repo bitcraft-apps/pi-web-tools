@@ -8,7 +8,7 @@
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import type { ThemeColor } from "@mariozechner/pi-coding-agent";
+import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import { fetchAsMarkdown, formatWebfetchResult } from "../../src/webfetch.ts";
 
 // Stable, on-brand, visually varied (heading + prose + numbered list +

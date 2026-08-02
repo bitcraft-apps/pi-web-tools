@@ -14,8 +14,8 @@ import {
   MAX_RESPONSE_BYTES,
   OPENCODE_UA,
 } from "./lib/headers.js";
-import { Type } from "@mariozechner/pi-ai";
-import { defineTool, keyHint } from "@mariozechner/pi-coding-agent";
+import { defineTool, keyHint } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { ensureText, type FormatterTheme } from "./lib/render.js";
 
 export interface FetchInput {
@@ -1158,7 +1158,7 @@ export const WEBFETCH_PREVIEW_MAX_LINE_CHARS = 500;
 /**
  * Format a byte count using the same B/KB/MB convention as the
  * built-in `read` tool's `formatSize` (see
- * `node_modules/@mariozechner/pi-coding-agent/dist/core/tools/truncate.js`).
+ * `node_modules/@earendil-works/pi-coding-agent/dist/core/tools/truncate.js`).
  * Inlined rather than imported because that module is not part of the
  * package's public export surface — importing through `dist/...` would
  * couple us to internal layout.

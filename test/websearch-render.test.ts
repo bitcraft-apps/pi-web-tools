@@ -1,4 +1,4 @@
-import { initTheme, keyHint } from "@mariozechner/pi-coding-agent";
+import { initTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   formatWebsearchCall,

@@ -13,7 +13,7 @@
 // justification, instead of being scattered as `{} as any` at every call
 // site.
 
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export function stubExtensionContext(): ExtensionContext {
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- intentional: see file header. Centralized stub for tools whose execute() never reads ctx.

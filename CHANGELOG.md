@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.3.3...v1.4.0) (2026-08-02)
+
+
+### Features
+
+* **webfetch:** support undici 8, drop the inlined formatSize ([#191](https://github.com/bitcraft-apps/pi-web-tools/issues/191)) ([6f219ae](https://github.com/bitcraft-apps/pi-web-tools/commit/6f219aed70dffb8259ca193121088acd40e42a17))
+
 ## [1.3.3](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.3.2...v1.3.3) (2026-08-02)
 
 

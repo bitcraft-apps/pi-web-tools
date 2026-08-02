@@ -7,7 +7,7 @@
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import type { ThemeColor } from "@mariozechner/pi-coding-agent";
+import type { ThemeColor } from "@earendil-works/pi-coding-agent";
 import { runDdgr } from "../../src/lib/ddgr.ts";
 import { formatWebsearchResult } from "../../src/websearch.ts";
 

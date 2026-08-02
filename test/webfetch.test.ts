@@ -1619,7 +1619,7 @@ function walkBlocked(err: unknown): NodeJS.ErrnoException | null {
     if (!cur || seen.has(cur)) continue;
     seen.add(cur);
     if (cur instanceof Error && (cur as NodeJS.ErrnoException).code === "EBLOCKED") {
-      return cur as NodeJS.ErrnoException;
+      return cur;
     }
     if (cur && typeof cur === "object") {
       const c = (cur as { cause?: unknown }).cause;

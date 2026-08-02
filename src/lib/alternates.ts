@@ -115,11 +115,11 @@ export function findAlternates(html: string): Alternate[] {
   // LINK_RE is a /g regex with state; reset before each pass so this
   // function is re-entrant.
   LINK_RE.lastIndex = 0;
-  for (let tag; (tag = LINK_RE.exec(scope)) !== null; ) {
+  for (let tag; (tag = LINK_RE.exec(scope)) !== null;) {
     const tagInner = tag[1] ?? "";
     const attrs: Record<string, string> = {};
     ATTR_RE.lastIndex = 0;
-    for (let a; (a = ATTR_RE.exec(tagInner)) !== null; ) {
+    for (let a; (a = ATTR_RE.exec(tagInner)) !== null;) {
       attrs[a[1]!.toLowerCase()] = a[2] ?? a[3] ?? a[4] ?? "";
     }
 

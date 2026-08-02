@@ -1,5 +1,5 @@
-import { Type } from "@mariozechner/pi-ai";
-import { defineTool, keyHint } from "@mariozechner/pi-coding-agent";
+import { defineTool, keyHint } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import type { DdgrResult, SafeSearch, TimeFilter } from "./lib/ddgr.js";
 import { runDdgr } from "./lib/ddgr.js";
 import { ensureText, type FormatterTheme } from "./lib/render.js";

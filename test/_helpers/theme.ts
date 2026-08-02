@@ -1,5 +1,5 @@
 // No-op `Theme` stub for unit tests of the pure formatters used by tool
-// renderers. Real `Theme` from @mariozechner/pi-coding-agent applies ANSI
+// renderers. Real `Theme` from @earendil-works/pi-coding-agent applies ANSI
 // escape codes; for snapshot-style assertions on formatter output we want
 // the strings to come through verbatim so tests stay readable and don't
 // depend on the active theme.
@@ -9,7 +9,7 @@
 // `ThemeColor` union for `fg`'s color param. Centralizing the cast here
 // keeps `as unknown as Theme` out of every test file.
 
-import type { Theme, ThemeColor } from "@mariozechner/pi-coding-agent";
+import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 
 export function stubTheme(): Pick<Theme, "fg" | "bold"> {
   return {

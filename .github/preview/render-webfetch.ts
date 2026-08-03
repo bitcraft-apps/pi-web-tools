@@ -6,7 +6,8 @@
 // in exactly one place.
 
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
-import { fetchAsMarkdown, formatWebfetchResult } from "../../src/webfetch.ts";
+import { fetchAsMarkdown } from "../../src/lib/pipeline.ts";
+import { formatWebfetchResult } from "../../src/webfetch.ts";
 import { makeTheme } from "./ansi-theme.ts";
 
 // Stable, on-brand, visually varied (heading + prose + numbered list +

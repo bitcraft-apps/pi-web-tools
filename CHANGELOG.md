@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.5.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.4.0...v1.5.0) (2026-08-03)
+
+
+### Features
+
+* **webfetch:** give shell-mode refusals a structured error code ([#231](https://github.com/bitcraft-apps/pi-web-tools/issues/231)) ([57ef4c1](https://github.com/bitcraft-apps/pi-web-tools/commit/57ef4c1d9fa317a77748c03994dbb7181bfc7110))
+
+
+### Bug Fixes
+
+* add additionalProperties: false to tool parameter schemas ([#240](https://github.com/bitcraft-apps/pi-web-tools/issues/240)) ([ac2a6f2](https://github.com/bitcraft-apps/pi-web-tools/commit/ac2a6f2fb513810fa0952425ac0a598cb45c61ca))
+* **html2md:** bound converter stdout, handle stdin errors, decode once ([#225](https://github.com/bitcraft-apps/pi-web-tools/issues/225)) ([8d06567](https://github.com/bitcraft-apps/pi-web-tools/commit/8d06567ee3c1d4ae957e34fbc7fd87647e3608ee))
+* **webfetch:** stop advertising PDFs as unfetchable, add prompt metadata ([#196](https://github.com/bitcraft-apps/pi-web-tools/issues/196)) ([c07ab83](https://github.com/bitcraft-apps/pi-web-tools/commit/c07ab83d8953343d3f99383131db1cf3968e7dd3))
+
 ## [1.4.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.3.3...v1.4.0) (2026-08-02)
 
 

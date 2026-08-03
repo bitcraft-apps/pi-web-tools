@@ -86,9 +86,9 @@ export function paginate(text: string, offset: number, maxChars: number): string
 // `stripPaginationFooter`.
 //
 // NOTE: README.md quotes this footer wording verbatim in the `webfetch
-// pagination` bullet under "## Operational notes". If you reword the
-// parts below, update that bullet too — there is no test that catches
-// drift between code and prose.
+// pagination` bullet under "## Limits and behavior". If you reword the
+// parts below, update that bullet too — the last test in
+// test/paginate.test.ts fails until you do.
 const PAGINATION_FOOTER_PARTS = [
   "\n\n[TRUNCATED — returned chars [",
   ", ",

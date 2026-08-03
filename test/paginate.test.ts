@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import { paginate, stripPaginationFooter } from "../src/lib/paginate.js";
 
@@ -106,5 +107,22 @@ describe("paginate", () => {
     const text = "x\uD83D\uDE00";
     const out = paginate(text, 0, 100);
     expect(out).toBe(text);
+  });
+
+  it("emits the footer wording that README.md quotes", () => {
+    // README.md quotes the footer in the `webfetch` pagination bullet under
+    // "## Limits and behavior". The code owns the wording; the prose is a
+    // copy that nothing else guards. This test fails on a reword until the
+    // README is updated too.
+    const chunk = paginate("x".repeat(10), 0, 5);
+    const footer = chunk.slice(stripPaginationFooter(chunk).length).trim();
+    // The README writes X, Y, and Z where the code emits numbers, so match
+    // every number run with a placeholder-tolerant token class.
+    const pattern = footer
+      .split(/\d+/)
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("[A-Za-z0-9]+");
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    expect(readme).toMatch(new RegExp(pattern));
   });
 });

@@ -65,41 +65,46 @@ const SAFESEARCH_VALUES = ["off", "moderate", "strict"] as const;
 const SAFESEARCH_DEFAULT: SafeSearch = "moderate";
 const TIME_VALUES = ["d", "w", "m", "y"] as const;
 
-const websearchSchema = Type.Object({
-  query: Type.String({ description: "The search query (free-form text)." }),
-  limit: Type.Optional(
-    Type.Number({
-      description: `Max number of results (default ${LIMIT_DEFAULT}, hard cap ${LIMIT_MAX}).`,
-      default: LIMIT_DEFAULT,
-    }),
-  ),
-  region: Type.Optional(
-    Type.String({
-      description:
-        "DuckDuckGo region code, e.g. 'pl-pl', 'us-en', 'de-de'. Default: ddgr's built-in (us-en). Invalid codes silently fall back to ddgr's default.",
-      pattern: "^[a-z]{2}-[a-z]{2}$",
-    }),
-  ),
-  safesearch: Type.Optional(
-    Type.Union(
-      SAFESEARCH_VALUES.map((v) => Type.Literal(v)),
-      {
-        description:
-          "Safe search level. 'off' disables it (passes --unsafe to ddgr). 'moderate' (default) and 'strict' both use ddgr's default safe-search behavior; ddgr does not distinguish them.",
-        default: SAFESEARCH_DEFAULT,
-      },
+// See webfetch's schema for why `additionalProperties: false` is required
+// rather than optional polish (#239).
+const websearchSchema = Type.Object(
+  {
+    query: Type.String({ description: "The search query (free-form text)." }),
+    limit: Type.Optional(
+      Type.Number({
+        description: `Max number of results (default ${LIMIT_DEFAULT}, hard cap ${LIMIT_MAX}).`,
+        default: LIMIT_DEFAULT,
+      }),
     ),
-  ),
-  time: Type.Optional(
-    Type.Union(
-      TIME_VALUES.map((v) => Type.Literal(v)),
-      {
+    region: Type.Optional(
+      Type.String({
         description:
-          "Time filter: 'd' (past day), 'w' (past week), 'm' (past month), 'y' (past year). Default: no filter (all time). Use when the query is time-sensitive ('latest', 'recent', 'this week') — DuckDuckGo's default ranking otherwise surfaces years-old SEO content above recent results.",
-      },
+          "DuckDuckGo region code, e.g. 'pl-pl', 'us-en', 'de-de'. Default: ddgr's built-in (us-en). Invalid codes silently fall back to ddgr's default.",
+        pattern: "^[a-z]{2}-[a-z]{2}$",
+      }),
     ),
-  ),
-});
+    safesearch: Type.Optional(
+      Type.Union(
+        SAFESEARCH_VALUES.map((v) => Type.Literal(v)),
+        {
+          description:
+            "Safe search level. 'off' disables it (passes --unsafe to ddgr). 'moderate' (default) and 'strict' both use ddgr's default safe-search behavior; ddgr does not distinguish them.",
+          default: SAFESEARCH_DEFAULT,
+        },
+      ),
+    ),
+    time: Type.Optional(
+      Type.Union(
+        TIME_VALUES.map((v) => Type.Literal(v)),
+        {
+          description:
+            "Time filter: 'd' (past day), 'w' (past week), 'm' (past month), 'y' (past year). Default: no filter (all time). Use when the query is time-sensitive ('latest', 'recent', 'this week') — DuckDuckGo's default ranking otherwise surfaces years-old SEO content above recent results.",
+        },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 export interface WebsearchToolDetails {
   query: string;

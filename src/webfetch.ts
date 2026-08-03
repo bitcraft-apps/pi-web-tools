@@ -4,41 +4,51 @@ import { fetchAsMarkdown } from "./lib/pipeline.js";
 import { MAX_CHARS_DEFAULT, MAX_CHARS_HARD_CAP, MAX_RESPONSE_BYTES } from "./lib/headers.js";
 import { ensureText, type FormatterTheme } from "./lib/render.js";
 
-const webfetchSchema = Type.Object({
-  url: Type.String({ description: "Absolute http(s) URL to fetch." }),
-  max_chars: Type.Optional(
-    Type.Number({
-      description: `Truncate output at N chars (default ${MAX_CHARS_DEFAULT}, hard cap ${MAX_CHARS_HARD_CAP}).`,
-      default: MAX_CHARS_DEFAULT,
-      // `minimum: 2` makes lib/paginate.ts's end-side surrogate-snap
-      // asymmetry a true schema invariant rather than a "production
-      // callers don't reach maxChars=1" assumption: at maxChars=1 the
-      // snap would empty the slice, so `paginate` deliberately ships a
-      // lone high surrogate instead — the only path that can desync the
-      // half-open [offset, end) tiling. Schema rejects what runtime
-      // would otherwise have to special-case.
-      minimum: 2,
-    }),
-  ),
-  offset: Type.Optional(
-    // Type.Integer (not Type.Number) so schema validation rejects 1.5 /
-    // negatives / out-of-range up front, before fetchAsMarkdown's runtime
-    // throw. The runtime guard remains as defense-in-depth for callers
-    // that bypass schema validation (e.g. direct fetchAsMarkdown imports).
-    Type.Integer({
-      minimum: 0,
-      // -1 because the runtime past-end short-circuit makes
-      // offset === MAX_RESPONSE_BYTES a no-op (always returns the
-      // past-end marker, since total <= MAX_RESPONSE_BYTES). Single
-      // source of truth: schema rejects what runtime would treat as
-      // garbage.
-      maximum: MAX_RESPONSE_BYTES - 1,
-      description:
-        "Character offset into the extracted markdown (default 0). When the previous fetch returned a `[TRUNCATED ... Re-call with offset=N ...]` footer, pass that N here to read the next chunk. There is no cache between calls — each paginated read re-fetches and re-extracts.",
-      default: 0,
-    }),
-  ),
-});
+// `additionalProperties: false` is not cosmetic: OpenAI/Codex providers
+// validate every function schema up front and reject one that omits it
+// ("'additionalProperties' is required to be supplied and to be false"),
+// which kills the whole turn before the model runs — see #239. Every
+// object in the parameter schema needs it; this schema is flat, so one
+// options arg covers it. test/schema.test.ts guards it for all
+// registered tools.
+const webfetchSchema = Type.Object(
+  {
+    url: Type.String({ description: "Absolute http(s) URL to fetch." }),
+    max_chars: Type.Optional(
+      Type.Number({
+        description: `Truncate output at N chars (default ${MAX_CHARS_DEFAULT}, hard cap ${MAX_CHARS_HARD_CAP}).`,
+        default: MAX_CHARS_DEFAULT,
+        // `minimum: 2` makes lib/paginate.ts's end-side surrogate-snap
+        // asymmetry a true schema invariant rather than a "production
+        // callers don't reach maxChars=1" assumption: at maxChars=1 the
+        // snap would empty the slice, so `paginate` deliberately ships a
+        // lone high surrogate instead — the only path that can desync the
+        // half-open [offset, end) tiling. Schema rejects what runtime
+        // would otherwise have to special-case.
+        minimum: 2,
+      }),
+    ),
+    offset: Type.Optional(
+      // Type.Integer (not Type.Number) so schema validation rejects 1.5 /
+      // negatives / out-of-range up front, before fetchAsMarkdown's runtime
+      // throw. The runtime guard remains as defense-in-depth for callers
+      // that bypass schema validation (e.g. direct fetchAsMarkdown imports).
+      Type.Integer({
+        minimum: 0,
+        // -1 because the runtime past-end short-circuit makes
+        // offset === MAX_RESPONSE_BYTES a no-op (always returns the
+        // past-end marker, since total <= MAX_RESPONSE_BYTES). Single
+        // source of truth: schema rejects what runtime would treat as
+        // garbage.
+        maximum: MAX_RESPONSE_BYTES - 1,
+        description:
+          "Character offset into the extracted markdown (default 0). When the previous fetch returned a `[TRUNCATED ... Re-call with offset=N ...]` footer, pass that N here to read the next chunk. There is no cache between calls — each paginated read re-fetches and re-extracts.",
+        default: 0,
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 export interface WebfetchToolDetails {
   url: string;

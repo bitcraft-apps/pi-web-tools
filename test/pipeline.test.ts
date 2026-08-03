@@ -22,7 +22,7 @@ vi.mock("../src/lib/pdf.js", () => ({
   pdfToText: vi.fn(async () => null),
 }));
 
-import { fetchAsMarkdown, looksLikeJsShell } from "../src/lib/pipeline.js";
+import { fetchAsMarkdown, looksLikeJsShell, ShellModeError } from "../src/lib/pipeline.js";
 import { RETRY_AFTER_MAX_MS } from "../src/lib/http.js";
 import { stripPaginationFooter } from "../src/lib/paginate.js";
 import { htmlToMarkdown } from "../src/lib/html2md.js";
@@ -1194,9 +1194,14 @@ describe("Cloudflare retry hack", () => {
       .mockResolvedValue(new Response("<html>blocked</html>", { status: 200, headers: cfHeaders }));
     stubFetch(mock);
 
-    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
-      /JS|cannot fetch/i,
+    // Issue #209: the message text is the model-facing contract (must not
+    // drift), `code` is the machine-readable discriminator.
+    const err = await fetchAsMarkdown({ url: "https://example.com" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ShellModeError);
+    expect(err.message).toBe(
+      "Site requires JS, cannot fetch in shell-only mode (Cloudflare challenge)",
     );
+    expect(err.code).toBe("cf_challenge");
   });
 
   // Issue #59: CF detection now reads only the first 4 KB of the body.
@@ -1394,9 +1399,11 @@ describe("JS-only shell detection in fetchAsMarkdown (issue #129)", () => {
       "JavaScript is not available. We've detected that JavaScript is disabled.",
     );
     mockFetchOnce({ body: "<html><body>shell</body></html>" });
-    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(
-      /Site requires JS, cannot fetch in shell-only mode \(JS-only shell\)/,
-    );
+    // Issue #209: exact message (model-facing contract) plus `code`.
+    const err = await fetchAsMarkdown({ url: "https://example.com" }).catch((e) => e);
+    expect(err).toBeInstanceOf(ShellModeError);
+    expect(err.message).toBe("Site requires JS, cannot fetch in shell-only mode (JS-only shell)");
+    expect(err.code).toBe("js_shell");
   });
 
   it("does NOT throw when markdown is large even if it mentions the marker phrase", async () => {

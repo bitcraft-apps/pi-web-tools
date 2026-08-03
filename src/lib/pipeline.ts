@@ -43,7 +43,8 @@ export interface FetchInput {
 // shell wastes the max_chars budget and gives the LLM noise instead of an
 // actionable error. Mirrors the Cloudflare-challenge path: same error-message
 // shape ("Site requires JS, cannot fetch in shell-only mode (...)"), so users
-// and the model learn one mental model with two parenthetical sub-causes.
+// and the model learn one mental model with two sub-causes. Both refusals are
+// `ShellModeError`s; programmatic callers tell them apart via `code`.
 //
 // Conservative phrase list — high precision, expanded only per real reproducer,
 // never speculatively. Add new markers the same way #127 added base64 strip
@@ -86,6 +87,29 @@ export function looksLikeJsShell(text: string): boolean {
 // when stubby. Lives next to looksLikeJsShell so any future retune touches
 // both signals together.
 const JS_SHELL_MAX_CHARS = 2048;
+
+export type ShellModeCode = "cf_challenge" | "js_shell";
+
+// Message text is owned by the class, keyed by code, so the two throw sites
+// cannot drift apart and the parenthetical stays a rendering detail rather
+// than the discriminator. Callers branch on `err.code`.
+const SHELL_MODE_MESSAGES: Record<ShellModeCode, string> = {
+  cf_challenge: "Site requires JS, cannot fetch in shell-only mode (Cloudflare challenge)",
+  js_shell: "Site requires JS, cannot fetch in shell-only mode (JS-only shell)",
+};
+
+// Shell-only refusal: the page cannot be fetched without executing JS. The
+// constructor takes only the code so a wrong code/message pairing is
+// unrepresentable. See issue #209.
+export class ShellModeError extends Error {
+  readonly code: ShellModeCode;
+
+  constructor(code: ShellModeCode) {
+    super(SHELL_MODE_MESSAGES[code]);
+    this.name = "ShellModeError";
+    this.code = code;
+  }
+}
 
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   const url = validateUrl(input.url);
@@ -132,13 +156,12 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     currentUa = OPENCODE_UA;
     ({ response, finalUrl } = await fetchWithRedirects(url, currentUa));
     if (await isCloudflareChallenge(response)) {
-      // Error-string contract: the parenthetical ("Cloudflare challenge" vs
-      // "JS-only shell") is the only discriminator between the two shell-mode
-      // refusal causes. Callers that need to branch on cause must substring-
-      // match the parenthetical. Keep the shape stable across both throw
-      // sites; if a third cause is ever added, promote to a structured error
-      // (e.g. an `code` field) rather than inventing a third parenthetical.
-      throw new Error("Site requires JS, cannot fetch in shell-only mode (Cloudflare challenge)");
+      // Error contract: `ShellModeError.code` is the discriminator between the
+      // two shell-mode refusal causes — callers branch on it, never on the
+      // message. The message text is a stable model-facing string; changing it
+      // changes tool output. A third cause means a new `ShellModeCode` member
+      // plus its entry in SHELL_MODE_MESSAGES, not a new parenthetical.
+      throw new ShellModeError("cf_challenge");
     }
   }
 
@@ -377,7 +400,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // signature we actually want to catch.
   const bodyVisible = body.replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript\s*>/gi, "");
   if (md.length < JS_SHELL_MAX_CHARS && (looksLikeJsShell(md) || looksLikeJsShell(bodyVisible))) {
-    throw new Error("Site requires JS, cannot fetch in shell-only mode (JS-only shell)");
+    throw new ShellModeError("js_shell");
   }
 
   return paginate(notice + md, offset, maxChars);

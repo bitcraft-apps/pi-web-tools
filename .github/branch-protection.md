@@ -22,6 +22,37 @@ the warning below.
 - `contract` — produced by `.github/workflows/contract.yml`
 - `Lint PR title (Conventional Commits)` — produced by `.github/workflows/pr-title.yml`
 
+## Admin enforcement and reviews
+
+`enforce_admins` is **on**, and `required_approving_review_count` is **0**. Both
+are deliberate; neither is an oversight.
+
+Admin enforcement is on even though this is a single-maintainer repo. Its purpose
+isn't to police a second person — there isn't one — it's to make sure an
+accidental `git push` to `main`, or a bypass taken in a hurry, can't put
+unchecked code on the default branch. The maintainer goes through a PR and waits
+for the same gates as anyone else.
+
+Zero required approvals is what lets the repo function at all. With one
+maintainer there is nobody to approve a PR, and GitHub won't let an author
+approve their own, so any non-zero count would deadlock every change. The gate
+here is CI, not a second pair of eyes: `ci-gate` (see below), `contract`, and the
+PR-title lint must all pass, on top of `required_linear_history`,
+`required_conversation_resolution`, and no force pushes or branch deletions.
+
+Two consequences worth knowing before they surprise you:
+
+- `strict: true` now applies to the maintainer too. A PR whose branch is behind
+  `main` needs **Update branch** before the merge button unlocks.
+- If a required check is itself broken and blocking the very fix that repairs it,
+  the move is to turn `enforce_admins` off, merge, and turn it straight back on.
+  That's a visible, auditable toggle — deliberately not the same thing as leaving
+  a standing bypass in place.
+
+`dismiss_stale_reviews` is `true` but inert while the required review count is 0.
+It's left enabled so it starts working on its own if a second maintainer is ever
+added, rather than becoming something to remember. It is not a misconfiguration.
+
 ## Why `ci-gate` and not the individual `ci.yml` jobs
 
 `ci.yml`'s real coverage is the `node-matrix` job: a `node` × `undici` matrix

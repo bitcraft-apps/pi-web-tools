@@ -69,9 +69,10 @@ Show
 #
 # regen.sh enforces this budget. Its preflight reads the two `Type …
 # Enter` lines below, runs them, and counts the wrapped rows. The budget
-# is 19 rows. Lower these flags if the check fails. The preflight also
-# asserts the `Set Width`, `Set Height`, and `Set Padding` values above,
-# because the budget applies only to that frame.
+# itself lives in one place — `row_budget` in regen.sh — so it isn't
+# restated here. Lower these flags if the check fails. The preflight also
+# asserts the frame settings above (font size, line height, width,
+# height, padding), because the budget applies only to that frame.
 Sleep 1s
 Type `websearch "pi coding agent" --limit 2` Enter
 # Wait for the shell prompt to come back rather than guessing at a fixed

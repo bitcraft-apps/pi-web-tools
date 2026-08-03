@@ -170,8 +170,18 @@ if [ "$do_video" -eq 1 ]; then
   # The tape holds that frame. Assert the values instead of deriving
   # them. A change to the geometry then fails here, and the maintainer
   # must measure the budget again.
-  for expect in "Set Width 1280" "Set Height 720" "Set Padding 40"; do
-    if ! grep -qx -- "$expect" "$tape"; then
+  #
+  # Font size and line height are in this list for the same reason as the
+  # pixel dimensions: they set how many rows fit and how wide a row is,
+  # so a bump to either invalidates row_budget and wrap_cols just as
+  # directly as a change to Width.
+  #
+  # Anchored prefix match, not `grep -qx`: `Set Width 1280  # 720p` still
+  # asserts the value we care about, and the error below stays true. The
+  # `.` in a value like 1.3 is escaped so it can't match any character.
+  for expect in "Set FontSize 18" "Set LineHeight 1.3" \
+                "Set Width 1280" "Set Height 720" "Set Padding 40"; do
+    if ! grep -qE "^${expect//./\\.}([[:space:]]|\$)" "$tape"; then
       echo "ERROR: demo.tape no longer says '$expect'." >&2
       echo "       row_budget/wrap_cols in this script were measured at that" >&2
       echo "       geometry. Re-measure them before changing the frame." >&2
@@ -187,6 +197,10 @@ if [ "$do_video" -eq 1 ]; then
   # The pattern matches the two visible `Type … Enter` lines. It does not
   # match the `Hide` block's `Type "alias websearch=…"`, because no
   # command name follows the opening quote there.
+  #
+  # `$1` goes into the regex unescaped. Every caller passes a bare tool
+  # name ([a-z]+), which has no regex meaning. Keep it that way: a `.` or
+  # `/` in an argument here would silently widen the match.
   tape_cmd() {
     sed -nE "s/^Type [\"\`]($1 .*)[\"\`] Enter[[:space:]]*\$/\1/p" "$tape"
   }
@@ -225,10 +239,27 @@ if [ "$do_video" -eq 1 ]; then
       echo "       row budget unmeasured." >&2
       exit 1
     fi
+    # tape_cmd prints every match. A second typed `$name` line would make
+    # `cmd` multi-line: `eval` would run both commands and the rows below
+    # would be their sum, which is not the height of either frame.
+    if [ "$(printf '%s\n' "$cmd" | wc -l)" -ne 1 ]; then
+      echo "ERROR: demo.tape has more than one typed '$name' line:" >&2
+      printf '%s\n' "$cmd" >&2
+      echo "       The budget is per frame, so each segment must map to one" >&2
+      echo "       command. Split the tape or narrow tape_cmd()." >&2
+      exit 1
+    fi
 
     echo "      probing: $cmd"
     echo "        ($why)"
-    out=$(eval "$cmd")
+    # `; printf x` plus the strips below preserve trailing newlines that
+    # command substitution would otherwise eat. A blank row at the end of
+    # the output still occupies a row in the frame. The second strip drops
+    # the final line terminator only, so `printf '%s\n'` below re-adds it
+    # rather than counting it twice.
+    out=$(eval "$cmd"; printf x)
+    out=${out%x}
+    out=${out%$'\n'}
 
     # The measurement from README §"The row budget". Remove the SGR
     # codes, then count the rows each logical line wraps to. Note that

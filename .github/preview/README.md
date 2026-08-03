@@ -164,10 +164,16 @@ immediately before `vhs` runs.
 
 ### The row budget
 
-At 1280×720 with 18px JetBrainsMono and 40px padding the terminal holds
-**~21 rows**, including the typed command and the trailing prompt, which
-leaves a budget of **19 rows** of output. Both tools' defaults exceed
-that, which is why `demo.tape` passes `--limit 2` and `--max-chars 900`.
+At 720p with this font the terminal holds only so many rows, including
+the typed command and the trailing prompt. Both tools' defaults exceed
+what's left for output, which is why `demo.tape` passes `--limit 2` and
+`--max-chars 900`.
+
+The numbers live in exactly one place: `row_budget`, `row_warn`, and
+`wrap_cols` at the top of the video block in `regen.sh`. They are
+measured at the tape's frame, not derived from it — `Set Width` is a
+pixel value, and pixels-to-columns depends on the font's advance width.
+Read them there rather than trusting a copy.
 
 No check on the finished MP4 can find an overflow. A frame that lost its
 `✓` header renders correctly, and it passes the geometry, codec,
@@ -175,24 +181,22 @@ duration, and size checks. `regen.sh` therefore measures the height
 *before* it records. The preflight reads the two `Type … Enter` lines
 from the tape, runs them, and counts the wrapped rows:
 
-- **more than 19 rows** — the run fails, and names the tape line to edit
-- **18 or 19 rows** — the run warns. The output fits, but the content is
-  live. One longer result title can overflow the next regen
-- **17 rows or fewer** — the run continues
+- **above `row_budget`** — the run fails, and names the tape line to edit
+- **at or above `row_warn`** — the run warns. The output fits, but the
+  content is live. One longer result title can overflow the next regen
+- **below `row_warn`** — the run continues
 
 The budget applies only to the frame it was measured at. The preflight
-therefore also asserts that the tape still says `Set Width 1280`,
-`Set Height 720`, and `Set Padding 40`. Measure the budget again by hand
-if you change the frame:
+therefore also asserts that the tape still declares the same font size,
+line height, width, height, and padding. Measure the budget again by
+hand if you change the frame:
 
 ```bash
+w=$(sed -nE 's/^ *wrap_cols=([0-9]+).*/\1/p' .github/preview/regen.sh)
 npx -y tsx .github/preview/demo-cli.ts websearch "pi coding agent" --limit 2 \
-  | awk -v w=120 '{gsub(/\x1b\[[0-9;]*m/,""); n=length($0);
-                   t += (n==0 ? 1 : int((n-1)/w)+1)} END{print t" rows"}'
+  | awk -v w="$w" '{gsub(/\x1b\[[0-9;]*m/,""); n=length($0);
+                    t += (n==0 ? 1 : int((n-1)/w)+1)} END{print t" rows"}'
 ```
-
-`w=120` is the effective column count at this width and padding. It is
-measured, not calculated from `Set Width`, which is a pixel value.
 
 Continue to watch the MP4 for the items no check covers: the pacing, dead
 air, and whether the cards read well. You no longer need to watch it for

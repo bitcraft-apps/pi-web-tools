@@ -66,11 +66,14 @@ Show
 # holds ~21 rows, and the tools' defaults overflow that. Rather than
 # letting the ✓ header scroll off the top — the one line that identifies
 # what the card is showing — the video asks for output that fits.
-# Nothing detects overflow automatically. If you change the frame or the
-# content, re-measure with the row-count snippet in this directory's
-# README (§"What regen.sh can't check") and then watch the result.
+#
+# regen.sh enforces this budget. Its preflight reads the two `Type …
+# Enter` lines below, runs them, and counts the wrapped rows. The budget
+# is 19 rows. Lower these flags if the check fails. The preflight also
+# asserts the `Set Width`, `Set Height`, and `Set Padding` values above,
+# because the budget applies only to that frame.
 Sleep 1s
-Type `websearch "pi coding agent" --limit 3` Enter
+Type `websearch "pi coding agent" --limit 2` Enter
 # Wait for the shell prompt to come back rather than guessing at a fixed
 # duration — ddgr latency varies and a fixed Sleep either truncates the
 # results or leaves dead air.

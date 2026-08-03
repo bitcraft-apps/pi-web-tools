@@ -86,7 +86,7 @@ jobs:
         # Mirrors the major boundaries of `dependencies.undici`. Keep these two
         # in sync: widening the range without adding its major here leaves the
         # new major untested, which is how the pre-#166 gap opened.
-        undici: ["6", "7", "8", "999"]
+        undici: ["6", "7", "8"]
     steps:
       # SHA-pinned to match the `checks` job above.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

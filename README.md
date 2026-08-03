@@ -94,7 +94,6 @@ bun run lint                # oxlint + type-aware oxlint-tsgolint; CI runs this 
 bun run format              # apply oxfmt to src/, test/, index.ts, vitest.config.ts
 bun run format:check        # CI runs this before lint; fails if anything is unformatted
 bun run test                # unit tests, no network
-bun run test:network        # integration tests (requires net)
 bash scripts/metrics.sh     # passive health signals (npm + GitHub) and upstream pi drift; on-demand, no state
 ```
 

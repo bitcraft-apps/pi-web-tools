@@ -49,7 +49,6 @@
   "scripts": {
     "test": "vitest --run",
     "test:watch": "vitest",
-    "test:network": "RUN_NETWORK_TESTS=1 vitest --run",
     "typecheck": "tsgo --noEmit -p tsconfig.json",
     "lint": "oxlint --deny-warnings",
     "format": "oxfmt src/ test/ index.ts vitest.config.ts",

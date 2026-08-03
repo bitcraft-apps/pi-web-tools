@@ -11,5 +11,4 @@ Closes #<issue>
 
 - [ ] `bun run test` passes
 - [ ] `bun run typecheck` passes
-- [ ] If touching network code: `bun run test:network` ran locally if behavior changed (opt-in via `RUN_NETWORK_TESTS=1`)
 - [ ] Manual verification: <what you ran, if applicable>

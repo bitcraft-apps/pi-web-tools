@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
 import { parseOutput, buildDdgrArgs } from "../src/lib/ddgr.js";
 
 describe("parseOutput", () => {
@@ -115,5 +117,35 @@ describe("runDdgr (mocked)", () => {
     }));
     const { runDdgr } = await import("../src/lib/ddgr.js");
     await expect(runDdgr("test", 8)).rejects.toThrow(/ddgr not installed/i);
+  });
+
+  it("maps a timeout to the rate-limit message, not the generic one", async () => {
+    // ddgr is the only call site that overrides runCommand's default
+    // `${cmd} timed out` text, so pin the override here.
+    vi.doMock("node:child_process", () => ({
+      spawn: () => {
+        // Child that never closes on its own — only kill() (from the timeout
+        // branch) makes it close.
+        const ee: any = new EventEmitter();
+        ee.stdout = new Readable({ read() {} });
+        ee.stderr = new Readable({ read() {} });
+        ee.kill = () => {
+          ee.stdout.push(null);
+          ee.stderr.push(null);
+          setImmediate(() => ee.emit("close", null));
+        };
+        return ee;
+      },
+    }));
+    const { runDdgr } = await import("../src/lib/ddgr.js");
+    vi.useFakeTimers();
+    try {
+      const p = runDdgr("test", 8);
+      const assertion = expect(p).rejects.toThrow(/DuckDuckGo timed out/);
+      await vi.advanceTimersByTimeAsync(16_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,14 +1,7 @@
-import { spawn } from "node:child_process";
 import { commandExists } from "./which.ts";
+import { runCommand } from "./run-command.ts";
 
 const CONVERT_TIMEOUT_MS = 10_000;
-
-// 50 MB peak-memory backstop on converter stdout, matching extract.ts and
-// pdf.ts. Pandoc/w3m emit markdown/text smaller than their HTML input on every
-// realistic page; this only fires on a runaway converter. Combined with
-// CONVERT_TIMEOUT_MS it keeps a misbehaving converter from doubling peak heap
-// (the input HTML is already in memory in the caller).
-const CONVERT_MAX_BYTES = 50 * 1024 * 1024;
 
 export type Converter = "pandoc" | "w3m";
 
@@ -27,73 +20,6 @@ export async function detectConverter(): Promise<Converter | null> {
 /** Test-only: clear the cached converter detection. */
 export function __resetConverterCache(): void {
   cachedDetection = undefined;
-}
-
-function runConverter(cmd: string, args: string[], stdin: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let child;
-    try {
-      child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
-    } catch (e) {
-      return reject(e);
-    }
-    // Collect Buffers and decode once at close: per-chunk toString("utf-8")
-    // mojibakes when a multi-byte codepoint straddles a chunk boundary.
-    // No setEncoding() on stdout/stderr, so chunks are always Buffers.
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let stdoutBytes = 0;
-    let overflowed = false;
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, CONVERT_TIMEOUT_MS);
-
-    child.stdout.on("data", (c: Buffer) => {
-      // Once we've decided to abort (overflow or timeout), drop further chunks
-      // on the floor — otherwise the converter can keep firing data events
-      // between SIGTERM and close, repeatedly clearing chunks and re-calling
-      // kill. Harmless but wasteful.
-      if (overflowed || timedOut) return;
-      stdoutBytes += c.length;
-      if (stdoutBytes > CONVERT_MAX_BYTES) {
-        overflowed = true;
-        // Drop already-buffered chunks immediately so a misbehaving converter
-        // in a long-lived agent process doesn't keep ~50 MB live until the
-        // close handler runs and the Promise rejects.
-        stdoutChunks.length = 0;
-        child.kill("SIGTERM");
-        return;
-      }
-      stdoutChunks.push(c);
-    });
-    child.stderr.on("data", (c: Buffer) => stderrChunks.push(c));
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      // Overflow is checked first: the overflow kill also yields a non-zero
-      // (or null) exit code, and the cap message is the useful one.
-      if (overflowed) return reject(new Error(`${cmd} stdout exceeded ${CONVERT_MAX_BYTES} bytes`));
-      if (timedOut) return reject(new Error(`${cmd} timed out`));
-      if (code !== 0) {
-        const stderr = Buffer.concat(stderrChunks).toString("utf-8");
-        return reject(new Error(`${cmd} exited with code ${code}: ${stderr}`));
-      }
-      resolve(Buffer.concat(stdoutChunks).toString("utf-8"));
-    });
-
-    // Swallow EPIPE/ECONNRESET on stdin: the converter may exit before
-    // consuming the full input (timeout, overflow kill, crash, or a parse
-    // bailout). Without this handler node treats the writable's "error" as
-    // unhandled and crashes the process. The close/error/timeout paths above
-    // already produce the right Promise outcome.
-    child.stdin.on("error", () => {});
-    child.stdin.end(stdin);
-  });
 }
 
 // Match base64-encoded `data:` URIs, capturing the MIME type and any
@@ -148,9 +74,13 @@ export async function htmlToMarkdown(html: string): Promise<string> {
   // both pandoc and w3m output, and any future renderer, without per-
   // converter wiring. The cost is a single linear-time regex over a string
   // we already hold; see issue #127.
-  const raw =
+  const args =
     converter === "pandoc"
-      ? await runConverter("pandoc", ["-f", "html", "-t", "markdown_strict", "--wrap=none"], html)
-      : await runConverter("w3m", ["-dump", "-T", "text/html", "-cols", "120"], html);
+      ? ["-f", "html", "-t", "markdown_strict", "--wrap=none"]
+      : ["-dump", "-T", "text/html", "-cols", "120"];
+  const raw = await runCommand(converter, args, {
+    stdin: html,
+    timeoutMs: CONVERT_TIMEOUT_MS,
+  });
   return stripBase64DataUris(raw);
 }

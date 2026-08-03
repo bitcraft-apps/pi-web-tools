@@ -55,16 +55,17 @@ export function paginate(text: string, offset: number, maxChars: number): string
   // the deferred low surrogate) or when the chunk is one char long
   // (snapping would empty the slice — the high half ships now and the
   // low half ships at the next offset). Production callers can't reach
-  // maxChars=1: schema enforces `minimum: 2` and `fetchAsMarkdown`
-  // clamps direct callers to the same floor. The branch survives only
+  // maxChars=1: `fetchAsMarkdown` clamps every caller to a floor of 2
+  // (the schema's `minimum: 2` is gone — OpenAI/Codex strict mode, #241 —
+  // so that clamp is the only enforcement). The branch survives only
   // for `paginate`'s exported test surface, which still accepts 1.
   //
   // The guard is intentionally one-sided (chunk *end* only). At the
   // chunk *start* the symmetric case — `offset` landing on a lone low
   // surrogate — can only happen if a previous call shipped a lone high
-  // surrogate (i.e. the maxChars=1 escape hatch above fired). Schema
-  // and runtime both forbid maxChars=1 in production, so the asymmetry
-  // is a true invariant; adding a start-side snap would silently drop
+  // surrogate (i.e. the maxChars=1 escape hatch above fired).
+  // `fetchAsMarkdown`'s clamp forbids maxChars=1 in production, so the
+  // asymmetry is a true invariant; adding a start-side snap would silently drop
   // the low half and break the half-open [offset, end) tiling guarantee.
   if (end < total && end - 1 > offset) {
     const last = text.charCodeAt(end - 1);

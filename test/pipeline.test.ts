@@ -315,17 +315,18 @@ describe("fetchAsMarkdown", () => {
     // guaranteed past-end and gets rejected up front rather than reaching
     // paginate's marker. Companion to the `MAX_RESPONSE_BYTES + 1` test
     // above and the `MAX_RESPONSE_BYTES - 1` boundary below; together
-    // they prove the schema cap (`maximum: MAX_RESPONSE_BYTES - 1`) and
-    // runtime cap agree at the seam.
+    // they pin the documented range [0, MAX_RESPONSE_BYTES - 1] at the
+    // seam. Runtime is the only enforcement — the schema's `maximum` was
+    // dropped for OpenAI/Codex strict mode (#241).
     await expect(
       fetchAsMarkdown({ url: "https://example.com", offset: MAX_RESPONSE_BYTES }),
     ).rejects.toThrow(/exceeds the maximum addressable range/i);
   });
 
   it("accepts offset === MAX_RESPONSE_BYTES - 1 at the boundary (issue #132)", async () => {
-    // Mirror of the rejection boundary: the schema's `maximum:
-    // MAX_RESPONSE_BYTES - 1` is the largest legal offset, and runtime
-    // must accept it (no early reject) so schema and runtime agree.
+    // Mirror of the rejection boundary: MAX_RESPONSE_BYTES - 1 is the
+    // largest offset the `offset` description documents as legal, and
+    // runtime must accept it (no early reject).
     // Body is well under that offset, so paginate returns the past-end
     // marker — the assertion is only that we reach paginate at all,
     // not that the offset hits content.

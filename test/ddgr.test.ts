@@ -70,6 +70,17 @@ describe("buildDdgrArgs", () => {
     expect(args[args.indexOf("--reg") + 1]).toBe("pl-pl");
   });
 
+  it("drops region codes that don't match the ll-cc shape (#241)", () => {
+    // The schema's `pattern` had to go for OpenAI/Codex strict mode, so this
+    // is the only place the format is checked. Dropping (not throwing) matches
+    // the documented "unknown codes fall back to ddgr's default" behavior, and
+    // keeps flag-shaped strings from reaching argv as a --reg value.
+    for (const region of ["US-EN", "pl_pl", "pl", "polish", "--proxy=x", "pl-pl extra"]) {
+      expect(buildDdgrArgs("q", 8, { region })).not.toContain("--reg");
+    }
+    expect(buildDdgrArgs("q", 8, { region: "pl-pl" })).toContain("--reg");
+  });
+
   it("adds --unsafe only when safesearch is off", () => {
     expect(buildDdgrArgs("q", 8, { safesearch: "off" })).toContain("--unsafe");
     expect(buildDdgrArgs("q", 8, { safesearch: "moderate" })).not.toContain("--unsafe");

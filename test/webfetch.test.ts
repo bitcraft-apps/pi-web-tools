@@ -70,4 +70,28 @@ describe("webfetchTool", () => {
       expect(textContent.text).toContain("MD:");
     }
   });
+
+  it("treats explicit nulls as not supplied (#241)", async () => {
+    // Strict mode forbids optional properties, so a Codex-driven session
+    // sends null for args the model skipped. This is not cosmetic: pi does
+    // not normalize args before execute, and a raw `offset: null` reaches
+    // fetchAsMarkdown's integer guard and throws `Invalid offset: null` —
+    // i.e. every default webfetch call on those providers would fail.
+    mockFetchOnce({ body: "<h1>Hi</h1>" });
+    const result = await webfetchTool.execute(
+      "tc-nulls",
+      { url: "https://example.com", max_chars: null, offset: null },
+      new AbortController().signal,
+      () => {},
+      stubExtensionContext(),
+    );
+    const textContent = result.content[0]!;
+    expect(textContent.type).toBe("text");
+    if (textContent.type === "text") {
+      expect(textContent.text).toContain("MD:");
+      // No truncation footer: null max_chars fell back to the 50k default
+      // rather than being passed through as a limit.
+      expect(textContent.text).not.toMatch(/TRUNCATED/);
+    }
+  });
 });

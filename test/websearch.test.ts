@@ -155,6 +155,28 @@ describe("websearchTool", () => {
     expect(opts?.time).toBeUndefined();
   });
 
+  it("treats explicit nulls as not supplied (#241)", async () => {
+    // OpenAI/Codex strict mode forbids optional properties, so the schema
+    // expresses "not supplied" as an explicit null (required + nullable) and
+    // a Codex-driven session really does send `null` for every arg the model
+    // skipped. pi does not validate or normalize args before execute, so
+    // this null-to-default mapping is entirely on us: without it every
+    // strict-mode call would pass region=null / time=null into runDdgr.
+    vi.mocked(runDdgr).mockResolvedValueOnce([]);
+    await websearchTool.execute(
+      "tc-nulls",
+      { query: "x", limit: null, region: null, safesearch: null, time: null },
+      new AbortController().signal,
+      () => {},
+      stubCtx,
+    );
+    expect(runDdgr).toHaveBeenLastCalledWith("x", 8, {
+      region: undefined,
+      safesearch: "moderate",
+      time: undefined,
+    });
+  });
+
   it("propagates errors from ddgr", async () => {
     vi.mocked(runDdgr).mockRejectedValueOnce(
       new Error("ddgr not installed. Run: brew install ddgr"),

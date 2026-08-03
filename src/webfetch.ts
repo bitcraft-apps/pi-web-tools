@@ -4,48 +4,44 @@ import { fetchAsMarkdown } from "./lib/pipeline.js";
 import { MAX_CHARS_DEFAULT, MAX_CHARS_HARD_CAP, MAX_RESPONSE_BYTES } from "./lib/headers.js";
 import { ensureText, type FormatterTheme } from "./lib/render.js";
 
-// `additionalProperties: false` is not cosmetic: OpenAI/Codex providers
-// validate every function schema up front and reject one that omits it
-// ("'additionalProperties' is required to be supplied and to be false"),
-// which kills the whole turn before the model runs — see #239. Every
-// object in the parameter schema needs it; this schema is flat, so one
-// options arg covers it. test/schema.test.ts guards it for all
-// registered tools.
+// This schema is shaped by OpenAI/Codex strict function-calling validation,
+// not by what typebox would let us write. Those providers check every
+// registered function schema before the model runs, and a rejection kills
+// the whole turn, not one call — twice now in shipped releases (#239, #241).
+// Three rules drive everything odd-looking below:
+//
+//   1. every object needs `additionalProperties: false` (#239). This schema
+//      is flat, so one options arg covers it.
+//   2. `required` must list *every* key in `properties` (#241) — so an
+//      optional field is `Type.Union([X, Type.Null()])`, never
+//      `Type.Optional`. `execute` maps null back to "not supplied".
+//   3. only core keywords survive: no `default`, `minimum`, `maximum`,
+//      `pattern`. Bounds live in the description (for the model) and in
+//      `fetchAsMarkdown`'s guards (for enforcement) instead.
+//
+// test/schema.test.ts asserts all three for every registered tool.
 const webfetchSchema = Type.Object(
   {
     url: Type.String({ description: "Absolute http(s) URL to fetch." }),
-    max_chars: Type.Optional(
-      Type.Number({
-        description: `Truncate output at N chars (default ${MAX_CHARS_DEFAULT}, hard cap ${MAX_CHARS_HARD_CAP}).`,
-        default: MAX_CHARS_DEFAULT,
-        // `minimum: 2` makes lib/paginate.ts's end-side surrogate-snap
-        // asymmetry a true schema invariant rather than a "production
-        // callers don't reach maxChars=1" assumption: at maxChars=1 the
-        // snap would empty the slice, so `paginate` deliberately ships a
-        // lone high surrogate instead — the only path that can desync the
-        // half-open [offset, end) tiling. Schema rejects what runtime
-        // would otherwise have to special-case.
-        minimum: 2,
-      }),
-    ),
-    offset: Type.Optional(
-      // Type.Integer (not Type.Number) so schema validation rejects 1.5 /
-      // negatives / out-of-range up front, before fetchAsMarkdown's runtime
-      // throw. The runtime guard remains as defense-in-depth for callers
-      // that bypass schema validation (e.g. direct fetchAsMarkdown imports).
-      Type.Integer({
-        minimum: 0,
-        // -1 because the runtime past-end short-circuit makes
-        // offset === MAX_RESPONSE_BYTES a no-op (always returns the
-        // past-end marker, since total <= MAX_RESPONSE_BYTES). Single
-        // source of truth: schema rejects what runtime would treat as
-        // garbage.
-        maximum: MAX_RESPONSE_BYTES - 1,
-        description:
-          "Character offset into the extracted markdown (default 0). When the previous fetch returned a `[TRUNCATED ... Re-call with offset=N ...]` footer, pass that N here to read the next chunk. There is no cache between calls — each paginated read re-fetches and re-extracts.",
-        default: 0,
-      }),
-    ),
+    max_chars: Type.Union([Type.Number(), Type.Null()], {
+      description: `Truncate output at N chars (default ${MAX_CHARS_DEFAULT}, minimum 2, hard cap ${MAX_CHARS_HARD_CAP}). Pass null to use the default.`,
+    }),
+    // The floor of 2 is what makes lib/paginate.ts's end-side surrogate-snap
+    // asymmetry an invariant rather than a "production callers don't reach
+    // maxChars=1" assumption: at maxChars=1 the snap would empty the slice,
+    // so `paginate` deliberately ships a lone high surrogate instead — the
+    // only path that can desync the half-open [offset, end) tiling. It is
+    // enforced solely by `fetchAsMarkdown`'s clamp now that strict mode
+    // rules out `minimum`.
+    offset: Type.Union([Type.Integer(), Type.Null()], {
+      // Type.Integer (not Type.Number) because `type: "integer"` is core and
+      // survives strict mode; the [0, MAX_RESPONSE_BYTES - 1] range does not,
+      // so it is stated in the description and enforced only by
+      // fetchAsMarkdown's runtime throw. MAX_RESPONSE_BYTES - 1 because the
+      // runtime past-end short-circuit makes offset === MAX_RESPONSE_BYTES a
+      // guaranteed no-op (total <= MAX_RESPONSE_BYTES).
+      description: `Character offset into the extracted markdown — an integer in [0, ${MAX_RESPONSE_BYTES - 1}]; pass null or 0 to start at the beginning. When the previous fetch returned a \`[TRUNCATED ... Re-call with offset=N ...]\` footer, pass that N here to read the next chunk. There is no cache between calls — each paginated read re-fetches and re-extracts.`,
+    }),
   },
   { additionalProperties: false },
 );
@@ -66,8 +62,12 @@ export interface WebfetchToolDetails {
 
 export interface WebfetchCallArgs {
   url?: string;
-  max_chars?: number;
-  offset?: number;
+  // `| null` because the schema expresses optionality as required + nullable
+  // (see webfetchSchema): renderCall receives whatever the model sent, so
+  // null reaches the formatters. Their `typeof … === "number"` guards already
+  // treat it as absent.
+  max_chars?: number | null;
+  offset?: number | null;
 }
 
 /**
@@ -280,10 +280,15 @@ export const webfetchTool = defineTool<typeof webfetchSchema, WebfetchToolDetail
     // Structural pass-through (not a cast): listing each field makes the
     // compiler catch schema/FetchInput drift here instead of relying on an
     // assertion to silently paper over a rename.
+    //
+    // `?? undefined` is the null-to-absent hop required by the schema's
+    // required + nullable optionality (#241): FetchInput takes
+    // `number | undefined`, and a raw null would reach fetchAsMarkdown's
+    // offset guard and throw `Invalid offset: null`.
     const md = await fetchAsMarkdown({
       url: params.url,
-      max_chars: params.max_chars,
-      offset: params.offset,
+      max_chars: params.max_chars ?? undefined,
+      offset: params.offset ?? undefined,
     });
     return {
       content: [{ type: "text", text: md }],

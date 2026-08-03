@@ -113,8 +113,9 @@ export class ShellModeError extends Error {
 
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   const url = validateUrl(input.url);
-  // Runtime floor is 2, mirroring the schema's `minimum: 2`. Direct
-  // `fetchAsMarkdown` callers bypass schema validation, so the clamp here
+  // The floor of 2 is the *only* enforcement: the schema's `minimum: 2` was
+  // removed for OpenAI/Codex strict-mode compatibility (#241), and direct
+  // `fetchAsMarkdown` callers never went through schema validation anyway. It
   // is what makes paginate's end-side surrogate-snap asymmetry a true
   // invariant: at maxChars=1 the snap would empty the slice and the
   // half-open tiling would desync. See `paginate` in lib/paginate.ts and
@@ -137,8 +138,9 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // `>=`, not `>`: offset === MAX_RESPONSE_BYTES is guaranteed-past-end
   // (total <= MAX_RESPONSE_BYTES by the response-size cap), so the
   // request would always return the past-end marker — a no-op offset.
-  // Mirrors the schema cap (`maximum: MAX_RESPONSE_BYTES - 1`); single
-  // source of truth across schema-validated and direct callers.
+  // Sole enforcement of the cap: the schema's `maximum: MAX_RESPONSE_BYTES - 1`
+  // was removed for OpenAI/Codex strict-mode compatibility (#241) and now only
+  // appears in the `offset` description.
   if (offset >= MAX_RESPONSE_BYTES) {
     throw new Error(
       `offset ${offset} exceeds the maximum addressable range (${MAX_RESPONSE_BYTES} = MAX_RESPONSE_BYTES); documents that large are not supported`,

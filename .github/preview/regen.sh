@@ -7,6 +7,10 @@
 # script enforces the chain by exit code + a freshness check (the asset
 # must be newer than the input it was rendered from), so a partial
 # regen fails loudly instead of waiting to be eyeballed at review time.
+# The video path also measures the row budget before it records. Output
+# that is too tall scrolls the `✓` header off the top. Such a frame still
+# passes the geometry, codec, duration, and size checks, so the finished
+# MP4 cannot report this failure. Measure the height first instead.
 #
 # Prereqs:
 #   - freeze   (https://github.com/charmbracelet/freeze)     — PNGs only
@@ -115,6 +119,19 @@ if [ "$do_video" -eq 1 ]; then
   # Mirrors `Set FontFamily` in demo.tape.
   font="JetBrainsMono Nerd Font Mono"
 
+  # Row budget. The frame holds ~21 rows. That count includes the typed
+  # command and the trailing prompt. More than 19 rows of output pushes
+  # the `✓` header off the top. The header is the line that tells the
+  # viewer which tool ran.
+  #
+  # These values are measured at the geometry asserted below. They are
+  # not derived from it: `Set Width 1280` is pixels, and the pixels to
+  # columns ratio depends on the font advance width. Measure the values
+  # again if the frame changes. See README §"The row budget".
+  row_budget=19   # more than this: the output scrolls, so fail
+  row_warn=18     # this or more: the output fits, but with no headroom
+  wrap_cols=120   # effective columns at Width 1280 and Padding 40
+
   echo
   echo "==> video"
 
@@ -125,7 +142,7 @@ if [ "$do_video" -eq 1 ]; then
   # result. Check up front where the fix is one brew command.
   # (fc-list is fontconfig; if it isn't installed we can't check, and a
   # warning beats refusing to run.)
-  echo "[1/5] preflight: font + tools"
+  echo "[1/5] preflight: font, tools, liveness, row budget"
   if command -v fc-list >/dev/null 2>&1; then
     # Substring match via `case`, not `… | grep -q`: under `set -o
     # pipefail`, grep -q exits at the first match, fc-list dies on
@@ -149,19 +166,130 @@ if [ "$do_video" -eq 1 ]; then
     command -v "$bin" >/dev/null 2>&1 || { echo "ERROR: $bin not on PATH." >&2; exit 1; }
   done
 
-  # Liveness probes, one per segment of the tape. VHS doesn't care what
-  # exit code the commands inside the tape return, so a rate-limited
-  # ddgr or a missing pandoc would record a card that says "no results"
-  # (or a frame of stack trace) and still pass every check below —
-  # geometry, codec, duration, and size are all blind to content. Two
-  # cheap calls up front turn that into a loud failure: renderWebsearch
-  # throws on an empty result set and renderWebfetch throws if the URL
-  # 404s or pandoc/w3m aren't on PATH, so these exit non-zero exactly
-  # when it matters.
-  echo "      probing ddgr (a rate-limited search would record an empty card)"
-  npx -y tsx "$here/demo-cli.ts" websearch --limit 1 >/dev/null
-  echo "      probing webfetch (a missing pandoc/w3m would record a stack trace)"
-  npx -y tsx "$here/demo-cli.ts" webfetch --max-chars 200 >/dev/null
+  # The row budget above applies only to the frame it was measured at.
+  # The tape holds that frame. Assert the values instead of deriving
+  # them. A change to the geometry then fails here, and the maintainer
+  # must measure the budget again.
+  #
+  # Font size and line height are in this list for the same reason as the
+  # pixel dimensions: they set how many rows fit and how wide a row is,
+  # so a bump to either invalidates row_budget and wrap_cols just as
+  # directly as a change to Width.
+  #
+  # Anchored prefix match, not `grep -qx`: `Set Width 1280  # 720p` still
+  # asserts the value we care about, and the error below stays true. The
+  # `.` in a value like 1.3 is escaped so it can't match any character.
+  for expect in "Set FontSize 18" "Set LineHeight 1.3" \
+                "Set Width 1280" "Set Height 720" "Set Padding 40"; do
+    if ! grep -qE "^${expect//./\\.}([[:space:]]|\$)" "$tape"; then
+      echo "ERROR: demo.tape no longer says '$expect'." >&2
+      echo "       row_budget/wrap_cols in this script were measured at that" >&2
+      echo "       geometry. Re-measure them before changing the frame." >&2
+      exit 1
+    fi
+  done
+
+  # Get the command that the video types. Read it from the tape instead
+  # of repeating it here. The probe then measures the recorded command
+  # exactly, with its query, URL, and flag values. This also keeps
+  # `--limit` and `--max-chars` in one place.
+  #
+  # The pattern matches the two visible `Type … Enter` lines. It does not
+  # match the `Hide` block's `Type "alias websearch=…"`, because no
+  # command name follows the opening quote there.
+  #
+  # `$1` goes into the regex unescaped. Every caller passes a bare tool
+  # name ([a-z]+), which has no regex meaning. Keep it that way: a `.` or
+  # `/` in an argument here would silently widen the match.
+  tape_cmd() {
+    sed -nE "s/^Type [\"\`]($1 .*)[\"\`] Enter[[:space:]]*\$/\1/p" "$tape"
+  }
+
+  # These functions mirror demo.tape's aliases, so an extracted line runs
+  # without a change.
+  websearch() { npx -y tsx "$here/demo-cli.ts" websearch "$@"; }
+  webfetch() { npx -y tsx "$here/demo-cli.ts" webfetch "$@"; }
+
+  # Liveness and row budget, one call per segment of the tape.
+  #
+  # Liveness: VHS ignores the exit code of the commands in the tape. A
+  # rate-limited ddgr records a card that says "no results". A missing
+  # pandoc records a frame of stack trace. Both still pass every check
+  # below. renderWebsearch fails on an empty result set, and
+  # renderWebfetch fails if the URL returns 404 or pandoc and w3m are not
+  # on PATH. Run them first, and these failures become loud.
+  #
+  # Row budget: the output is here, so also count its height. No check on
+  # the finished MP4 can find this failure. The row count also depends on
+  # the content, which is live. One longer result title can push a
+  # segment that passed before above the budget.
+  probe_segment() {
+    local name why cmd out rows
+    name="$1"
+    why="$2"
+
+    cmd=$(tape_cmd "$name")
+    # An empty result means the tape no longer matches the tape_cmd
+    # pattern. Do not continue without the measurement. A silent skip is
+    # the failure this check must prevent.
+    if [ -z "$cmd" ]; then
+      echo "ERROR: no typed '$name' line found in demo.tape." >&2
+      echo "       Expected a line like: Type \"$name …\" Enter" >&2
+      echo "       Update tape_cmd() to match the tape — do not leave the" >&2
+      echo "       row budget unmeasured." >&2
+      exit 1
+    fi
+    # tape_cmd prints every match. A second typed `$name` line would make
+    # `cmd` multi-line: `eval` would run both commands and the rows below
+    # would be their sum, which is not the height of either frame.
+    if [ "$(printf '%s\n' "$cmd" | wc -l)" -ne 1 ]; then
+      echo "ERROR: demo.tape has more than one typed '$name' line:" >&2
+      printf '%s\n' "$cmd" >&2
+      echo "       The budget is per frame, so each segment must map to one" >&2
+      echo "       command. Split the tape or narrow tape_cmd()." >&2
+      exit 1
+    fi
+
+    echo "      probing: $cmd"
+    echo "        ($why)"
+    # `; printf x` plus the strips below preserve trailing newlines that
+    # command substitution would otherwise eat. A blank row at the end of
+    # the output still occupies a row in the frame. The second strip drops
+    # the final line terminator only, so `printf '%s\n'` below re-adds it
+    # rather than counting it twice.
+    out=$(eval "$cmd"; printf x)
+    out=${out%x}
+    out=${out%$'\n'}
+
+    # The measurement from README §"The row budget". Remove the SGR
+    # codes, then count the rows each logical line wraps to. Note that
+    # `length()` counts characters in a UTF-8 locale, but bytes in the C
+    # locale. A line of multi-byte glyphs near a wrap boundary can
+    # therefore count one row too high. Both locales agree on the current
+    # content, and the warning tier gives a margin for this difference.
+    rows=$(printf '%s\n' "$out" | awk -v w="$wrap_cols" \
+      '{gsub(/\x1b\[[0-9;]*m/,""); n=length($0);
+        t += (n==0 ? 1 : int((n-1)/w)+1)} END{print t+0}')
+
+    if [ "$rows" -gt "$row_budget" ]; then
+      echo "ERROR: $name renders $rows rows. The budget is $row_budget." >&2
+      echo "       The frame holds ~21 rows, including the typed command and" >&2
+      echo "       the trailing prompt. This output scrolls the ✓ header off" >&2
+      echo "       the top. The geometry, codec, duration, and size checks" >&2
+      echo "       below cannot find that." >&2
+      echo "       Fix: lower the flag on this demo.tape line:" >&2
+      echo "         $cmd" >&2
+      exit 1
+    elif [ "$rows" -ge "$row_warn" ]; then
+      echo "      warn: $rows rows, budget $row_budget. No headroom left."
+      echo "            The content is live. One longer line overflows the frame."
+    else
+      echo "      ok: $rows rows (budget $row_budget)"
+    fi
+  }
+
+  probe_segment websearch "a rate-limited search would record an empty card"
+  probe_segment webfetch "a missing pandoc/w3m would record a stack trace"
 
   # Scratch space for the freshness marker and the faststart re-mux.
   # Both used to live next to the asset in .github/, where an ffmpeg
@@ -252,11 +380,12 @@ if [ "$do_video" -eq 1 ]; then
 
   regenerated+=("$mp4")
 
-  # Not mechanically checkable, and the failure is invisible in CI:
+  # What the mechanical checks do not cover. The preflight row budget now
+  # covers overflow. No check can measure the pacing, or tell you if the
+  # cards read well.
   echo
-  echo "Watch the result before committing. Both segments must show the"
-  echo "typed command and the ✓ header — if either scrolled off the top,"
-  echo "lower --limit / --max-chars in demo.tape."
+  echo "Watch the result before you commit. Check the pacing for dead air or"
+  echo "a Sleep that is now wrong. Check that both cards still read well."
 fi
 
 echo

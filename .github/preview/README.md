@@ -70,7 +70,8 @@ command you see typed in the video is the tool's real name running the
 real implementation over the real network — nothing is replayed or
 staged. The `--limit` / `--max-chars` flags it types are genuine tool
 parameters, present because the tools' defaults overflow 720p and would
-scroll the `✓` header off the top of the frame.
+scroll the `✓` header off the top of the frame. See
+[The row budget](#the-row-budget) for the check that enforces this.
 
 ## When to regenerate
 
@@ -101,7 +102,9 @@ scroll the `✓` header off the top of the frame.
 
 - The pacing feels wrong, or a command now takes long enough that the
   `Sleep` beats leave dead air
-- Either segment scrolls (see the row budget note under Regen)
+- `regen.sh` warns that a segment reached the row budget. Lower a flag
+  before the check starts to fail. See
+  [The row budget](#the-row-budget)
 
 ## Regen
 
@@ -131,8 +134,8 @@ use the `.ts` extension rather than a `.js` shim.
 
 ```bash
 # PNGs:  capture → freeze → freshness check → pngquant → size floor
-# Video: preflight (font, tools, websearch+webfetch liveness) → vhs →
-#        freshness check → faststart re-mux →
+# Video: preflight (font, tools, websearch+webfetch liveness, row
+#        budget) → vhs → freshness check → faststart re-mux →
 #        geometry/codec/duration/size checks
 # Exits non-zero if any step fails or a renderer leaves a stale asset.
 .github/preview/regen.sh                # everything (default)
@@ -159,23 +162,45 @@ has no such input (`demo.tape` is a committed static file that any stale
 MP4 is already newer than), so it compares against a marker stamped
 immediately before `vhs` runs.
 
-### What regen.sh can't check: the row budget
+### The row budget
 
-At 1280×720 with 18px JetBrainsMono and 40px padding the terminal holds
-**~21 rows**, including the typed command and the trailing prompt. Both
-tools' default output exceeds that, which is why `demo.tape` passes
-`--limit 3` and `--max-chars 900`. Nothing detects overflow
-automatically — a scrolled frame renders and passes every check — so
-**watch the MP4 before committing**: each segment must show the typed
-command and the `✓` header. To re-measure after a content change:
+At 720p with this font the terminal holds only so many rows, including
+the typed command and the trailing prompt. Both tools' defaults exceed
+what's left for output, which is why `demo.tape` passes `--limit 2` and
+`--max-chars 900`.
+
+The numbers live in exactly one place: `row_budget`, `row_warn`, and
+`wrap_cols` at the top of the video block in `regen.sh`. They are
+measured at the tape's frame, not derived from it — `Set Width` is a
+pixel value, and pixels-to-columns depends on the font's advance width.
+Read them there rather than trusting a copy.
+
+No check on the finished MP4 can find an overflow. A frame that lost its
+`✓` header renders correctly, and it passes the geometry, codec,
+duration, and size checks. `regen.sh` therefore measures the height
+*before* it records. The preflight reads the two `Type … Enter` lines
+from the tape, runs them, and counts the wrapped rows:
+
+- **above `row_budget`** — the run fails, and names the tape line to edit
+- **at or above `row_warn`** — the run warns. The output fits, but the
+  content is live. One longer result title can overflow the next regen
+- **below `row_warn`** — the run continues
+
+The budget applies only to the frame it was measured at. The preflight
+therefore also asserts that the tape still declares the same font size,
+line height, width, height, and padding. Measure the budget again by
+hand if you change the frame:
 
 ```bash
-npx -y tsx .github/preview/demo-cli.ts websearch "pi coding agent" --limit 3 \
-  | awk -v w=120 '{gsub(/\x1b\[[0-9;]*m/,""); n=length($0);
-                   t += (n==0 ? 1 : int((n-1)/w)+1)} END{print t" rows"}'
+w=$(sed -nE 's/^ *wrap_cols=([0-9]+).*/\1/p' .github/preview/regen.sh)
+npx -y tsx .github/preview/demo-cli.ts websearch "pi coding agent" --limit 2 \
+  | awk -v w="$w" '{gsub(/\x1b\[[0-9;]*m/,""); n=length($0);
+                    t += (n==0 ? 1 : int((n-1)/w)+1)} END{print t" rows"}'
 ```
 
-Aim for ≤19 rows of output.
+Continue to watch the MP4 for the items no check covers: the pacing, dead
+air, and whether the cards read well. You no longer need to watch it for
+an overflow.
 
 ## Why a fixture file?
 
@@ -187,7 +212,9 @@ The video has no equivalent fixture — `vhs` drives a live terminal, so
 a recording is inherently a live run. That's the trade for showing real
 commands executing rather than a replay. It also means a regen can
 capture a bad moment: an empty DuckDuckGo response (rate limiting)
-renders a card advertising a search tool that finds nothing, and every
-mechanical check still passes. `renderWebsearch` throws on an empty
-result set and `regen.sh` probes ddgr before recording, which turns
-that into a loud failure — but it's the reason to watch the output.
+renders a card that advertises a search tool that finds nothing. A result
+set that is too tall scrolls the `✓` header away. Both records look
+correct, and both pass every check on the finished MP4. The preflight
+prevents this. It runs both commands before `vhs` does. At that point
+`renderWebsearch` can still fail on an empty result set, and the script
+can still count the rows.

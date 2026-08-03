@@ -34,20 +34,33 @@ export type SafeSearch = "off" | "moderate" | "strict";
 export type TimeFilter = "d" | "w" | "m" | "y";
 
 export interface RunDdgrOptions {
+  /**
+   * Maps to ddgr's `--reg`. Format is enforced here (see REGION_PATTERN), not
+   * at the schema boundary: OpenAI/Codex strict mode disallows `pattern`, so
+   * websearch.ts's schema had to drop it (#241) and this is the only check.
+   */
   region?: string;
   safesearch?: SafeSearch;
   /**
    * Maps to ddgr's `-t/--time`. Restrict results to the past day/week/month/year.
-   * Omitted → no time filter (ddgr default = all time). Validated at the schema
-   * boundary (websearch.ts) so this layer trusts the value.
+   * Omitted → no time filter (ddgr default = all time). Still validated at the
+   * schema boundary (websearch.ts's literal union, which strict mode allows) so
+   * this layer trusts the value.
    */
   time?: TimeFilter;
 }
 
+/**
+ * Region codes we pass through to ddgr. Anything else is dropped rather than
+ * rejected, matching the documented behavior ("unknown codes fall back to
+ * ddgr's default") and keeping non-region-shaped strings out of argv.
+ */
+const REGION_PATTERN = /^[a-z]{2}-[a-z]{2}$/;
+
 export function buildDdgrArgs(query: string, limit: number, opts: RunDdgrOptions = {}): string[] {
   const args = ["--json", "--num", String(limit), "--noprompt"];
   const region = opts.region?.trim();
-  if (region) {
+  if (region && REGION_PATTERN.test(region)) {
     args.push("--reg", region);
   }
   if (opts.safesearch === "off") {

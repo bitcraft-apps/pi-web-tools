@@ -65,43 +65,30 @@ const SAFESEARCH_VALUES = ["off", "moderate", "strict"] as const;
 const SAFESEARCH_DEFAULT: SafeSearch = "moderate";
 const TIME_VALUES = ["d", "w", "m", "y"] as const;
 
-// See webfetch's schema for why `additionalProperties: false` is required
-// rather than optional polish (#239).
+// See webfetch's schema for the three OpenAI/Codex strict-mode rules this
+// shape obeys (#239, #241): `additionalProperties: false`, every property in
+// `required` — hence `Type.Union([X, Type.Null()])` instead of
+// `Type.Optional` — and no `default`/`pattern` keywords. Defaults are stated
+// in the descriptions and applied in `execute`; the region format is enforced
+// in lib/ddgr.ts. test/schema.test.ts guards all of it.
 const websearchSchema = Type.Object(
   {
     query: Type.String({ description: "The search query (free-form text)." }),
-    limit: Type.Optional(
-      Type.Number({
-        description: `Max number of results (default ${LIMIT_DEFAULT}, hard cap ${LIMIT_MAX}).`,
-        default: LIMIT_DEFAULT,
-      }),
-    ),
-    region: Type.Optional(
-      Type.String({
-        description:
-          "DuckDuckGo region code, e.g. 'pl-pl', 'us-en', 'de-de'. Default: ddgr's built-in (us-en). Invalid codes silently fall back to ddgr's default.",
-        pattern: "^[a-z]{2}-[a-z]{2}$",
-      }),
-    ),
-    safesearch: Type.Optional(
-      Type.Union(
-        SAFESEARCH_VALUES.map((v) => Type.Literal(v)),
-        {
-          description:
-            "Safe search level. 'off' disables it (passes --unsafe to ddgr). 'moderate' (default) and 'strict' both use ddgr's default safe-search behavior; ddgr does not distinguish them.",
-          default: SAFESEARCH_DEFAULT,
-        },
-      ),
-    ),
-    time: Type.Optional(
-      Type.Union(
-        TIME_VALUES.map((v) => Type.Literal(v)),
-        {
-          description:
-            "Time filter: 'd' (past day), 'w' (past week), 'm' (past month), 'y' (past year). Default: no filter (all time). Use when the query is time-sensitive ('latest', 'recent', 'this week') — DuckDuckGo's default ranking otherwise surfaces years-old SEO content above recent results.",
-        },
-      ),
-    ),
+    limit: Type.Union([Type.Number(), Type.Null()], {
+      description: `Max number of results (default ${LIMIT_DEFAULT}, hard cap ${LIMIT_MAX}). Pass null to use the default.`,
+    }),
+    region: Type.Union([Type.String(), Type.Null()], {
+      description:
+        "DuckDuckGo region code matching ^[a-z]{2}-[a-z]{2}$, e.g. 'pl-pl', 'us-en', 'de-de'. Pass null for ddgr's built-in default (us-en). Malformed or unknown codes are ignored and fall back to that default.",
+    }),
+    safesearch: Type.Union([...SAFESEARCH_VALUES.map((v) => Type.Literal(v)), Type.Null()], {
+      description:
+        "Safe search level. 'off' disables it (passes --unsafe to ddgr). 'moderate' (default, also used when null) and 'strict' both use ddgr's default safe-search behavior; ddgr does not distinguish them.",
+    }),
+    time: Type.Union([...TIME_VALUES.map((v) => Type.Literal(v)), Type.Null()], {
+      description:
+        "Time filter: 'd' (past day), 'w' (past week), 'm' (past month), 'y' (past year). Pass null for no filter (all time). Use when the query is time-sensitive ('latest', 'recent', 'this week') — DuckDuckGo's default ranking otherwise surfaces years-old SEO content above recent results.",
+    }),
   },
   { additionalProperties: false },
 );
@@ -120,10 +107,14 @@ export interface WebsearchToolDetails {
 
 export interface WebsearchCallArgs {
   query: string;
-  limit?: number;
-  region?: string;
-  safesearch?: SafeSearch;
-  time?: TimeFilter;
+  // `| null` because the schema expresses optionality as required + nullable
+  // (see websearchSchema): renderCall gets what the model sent, so null
+  // reaches the formatter. Its `typeof` / truthiness guards treat it as
+  // absent, same as an omitted field.
+  limit?: number | null;
+  region?: string | null;
+  safesearch?: SafeSearch | null;
+  time?: TimeFilter | null;
 }
 
 /**
@@ -257,12 +248,15 @@ export const websearchTool = defineTool<typeof websearchSchema, WebsearchToolDet
   constrainedSampling: { type: "json_schema", strict: "prefer" },
   parameters: websearchSchema,
   async execute(_id, params, _signal, _onUpdate, _ctx) {
+    // Every `??`/`?? undefined` here is the null-to-absent hop the schema's
+    // required + nullable optionality forces (#241) — the model sends null
+    // for "not supplied", RunDdgrOptions takes `undefined`.
     const limit = Math.min(Math.max(1, params.limit ?? LIMIT_DEFAULT), LIMIT_MAX);
     const safesearch = params.safesearch ?? SAFESEARCH_DEFAULT;
     const results = await runDdgr(params.query, limit, {
-      region: params.region,
+      region: params.region ?? undefined,
       safesearch,
-      time: params.time,
+      time: params.time ?? undefined,
     });
     const payload = { query: params.query, results };
     const details: WebsearchToolDetails = {

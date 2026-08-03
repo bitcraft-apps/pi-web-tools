@@ -11,14 +11,38 @@ change to those settings.
 
 ## Required status checks on `main`
 
-The following check names must pass before a PR can be merged. They are
-copy-pasted verbatim from the GitHub branch-protection UI. GitHub renders
-multi-job workflow checks as `<workflow name> / <job id>` (or `<job name>`
-if set), which is why the job id matters for the binding — see the warning
-below.
+The following check names must pass before a PR can be merged. They are the
+check-run names as stored by the API (`gh api
+repos/bitcraft-apps/pi-web-tools/branches/main/protection`), which is the bare
+job `name:` — or the job id when `name:` is unset. The UI displays them with the
+workflow name alongside; the workflow name is not part of the match key — see
+the warning below.
 
-- `ci / checks` — produced by `.github/workflows/ci.yml`
+- `ci-gate` — produced by `.github/workflows/ci.yml`
+- `contract` — produced by `.github/workflows/contract.yml`
 - `Lint PR title (Conventional Commits)` — produced by `.github/workflows/pr-title.yml`
+
+## Why `ci-gate` and not the individual `ci.yml` jobs
+
+`ci.yml`'s real coverage is the `node-matrix` job: a `node` × `undici` matrix
+that exercises every pairing this package claims to support, because a bad
+pairing silently disables the connect-time SSRF guard. Its check-run names are
+derived from the matrix values (`node 24 / undici 8`), and `ci.yml` instructs
+maintainers to change those values as majors enter and leave support.
+
+Requiring those names directly would break on exactly the edit the workflow asks
+for: adding a major mints check names that are not in the required list (the new
+cells are advisory the day they land), and dropping an EOL major leaves a
+required context that never reports again, blocking every PR as pending until
+someone edits repository settings.
+
+So `ci-gate` aggregates `checks` and `node-matrix` via `needs:` and reports one
+name-stable result. `checks` is deliberately *not* required on its own — the
+gate covers it, and every extra name is one more binding to repo settings.
+Adding or removing a matrix axis value requires no branch-protection change.
+
+`needs:` cannot cross workflows, so `contract` stays its own required check. If
+`contract.yml` ever grows a matrix, it needs its own gate job by this pattern.
 
 ## ⚠️ Renaming a job breaks the required-check binding
 

@@ -127,3 +127,29 @@ jobs:
       # a filter that stops matching after a rename would skip silently and
       # still report success.
       - run: bun run test
+
+  # The one required status check for this workflow. Branch protection binds to
+  # check-run names, and node-matrix's names are derived from its matrix values
+  # (`node 24 / undici 8`) — values the comments above tell maintainers to change
+  # whenever a major enters or leaves support. Requiring those nine names
+  # directly means adding a major mints an unrequired check (the gap this job
+  # exists to close, reopened silently), and dropping one leaves a required check
+  # that never reports (PRs hang pending). This job's name never changes, so an
+  # axis edit needs no settings change. See .github/branch-protection.md and #215.
+  ci-gate:
+    needs: [checks, node-matrix]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Load-bearing. Without `always()` this job is *skipped* when a need fails,
+    # and a skipped required check leaves the PR pending rather than red — the
+    # failure presents as a hang, not a rejection.
+    if: always()
+    steps:
+      # Also load-bearing. Under `always()` this job runs even when its needs
+      # failed, so a gate with an empty body would report success on a broken
+      # matrix: a gate that gates nothing. Any result other than "success"
+      # (failure, cancelled, skipped) fails the gate — the safe direction.
+      - run: |
+          echo "checks=${{ needs.checks.result }} node-matrix=${{ needs.node-matrix.result }}"
+          [ "${{ needs.checks.result }}" = "success" ] \
+            && [ "${{ needs.node-matrix.result }}" = "success" ]

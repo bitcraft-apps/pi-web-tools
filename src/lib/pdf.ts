@@ -1,4 +1,4 @@
-import { commandExists } from "./which.ts";
+import { commandExists, probeOnce } from "./which.ts";
 import { runCommand } from "./run-command.ts";
 
 // pdftotext on a moderately-sized PDF (academic paper, RFC) finishes in tens
@@ -8,22 +8,14 @@ import { runCommand } from "./run-command.ts";
 // "pdftotext timed out" warning rather than the generic outer abort.
 const PDFTOTEXT_TIMEOUT_MS = 25_000;
 
-// Cached for the life of the process. A `null` result (no pdftotext on
-// $PATH) also sticks: pdftotext installed mid-process won't be picked up
-// until restart. Acceptable for an agent process; do not "fix" by re-probing.
-let cachedDetection: Promise<boolean> | undefined;
 let warnedNoPdftotext = false;
 let warnedPdftotextFailure = false;
 
-export async function detectPdftotext(): Promise<boolean> {
-  if (cachedDetection !== undefined) return cachedDetection;
-  cachedDetection = commandExists("pdftotext");
-  return cachedDetection;
-}
+export const detectPdftotext = probeOnce(() => commandExists("pdftotext"));
 
 /** Test-only: clear the cached detection and the one-shot warning latches. */
 export function __resetPdftotextCache(): void {
-  cachedDetection = undefined;
+  detectPdftotext.reset();
   warnedNoPdftotext = false;
   warnedPdftotextFailure = false;
 }

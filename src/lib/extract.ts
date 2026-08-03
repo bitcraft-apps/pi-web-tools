@@ -1,4 +1,4 @@
-import { commandExists } from "./which.ts";
+import { commandExists, probeOnce } from "./which.ts";
 import { runCommand } from "./run-command.ts";
 
 // Same backstop as html2md's CONVERT_TIMEOUT_MS. Note: webfetch now chains
@@ -9,30 +9,22 @@ const EXTRACT_TIMEOUT_MS = 10_000;
 
 export type Extractor = "trafilatura" | "rdrview";
 
-// Cached for the life of the process. A `null` result (no extractor on $PATH)
-// also sticks: an extractor installed mid-process won't be picked up until
-// restart. Acceptable for an agent process; do not "fix" by re-probing.
-let cachedDetection: Promise<Extractor | null> | undefined;
 let warnedNoExtractor = false;
 let warnedExtractorFailure = false;
 
-export async function detectExtractor(): Promise<Extractor | null> {
-  if (cachedDetection !== undefined) return cachedDetection;
-  cachedDetection = (async () => {
-    // trafilatura first: `pipx install trafilatura` is the install path that
-    // actually works cross-platform. rdrview has no homebrew formula and
-    // requires --disable-sandbox on macOS (no sandbox implemented there).
-    // Order can flip later if we ship a brew formula upstream for rdrview.
-    if (await commandExists("trafilatura")) return "trafilatura";
-    if (await commandExists("rdrview")) return "rdrview";
-    return null;
-  })();
-  return cachedDetection;
-}
+export const detectExtractor = probeOnce(async (): Promise<Extractor | null> => {
+  // trafilatura first: `pipx install trafilatura` is the install path that
+  // actually works cross-platform. rdrview has no homebrew formula and
+  // requires --disable-sandbox on macOS (no sandbox implemented there).
+  // Order can flip later if we ship a brew formula upstream for rdrview.
+  if (await commandExists("trafilatura")) return "trafilatura";
+  if (await commandExists("rdrview")) return "rdrview";
+  return null;
+});
 
 /** Test-only: clear the cached extractor detection and the one-shot warning latches. */
 export function __resetExtractorCache(): void {
-  cachedDetection = undefined;
+  detectExtractor.reset();
   warnedNoExtractor = false;
   warnedExtractorFailure = false;
 }

@@ -9,6 +9,38 @@ const EXTRACT_TIMEOUT_MS = 10_000;
 
 export type Extractor = "trafilatura" | "rdrview";
 
+// --html: emit cleaned HTML so the existing pandoc/w3m step gives a single
+//   canonical markdown style across extractor-on/off paths.
+// --no-comments: drop user-comment threads (noise for our use case).
+// Default precision/recall balance: --precision was tried but biases
+//   toward dropping borderline content (tables, code blocks adjacent to
+//   the article body). Revisit if chrome leakage is too high in practice.
+// NOTE: trafilatura has no documented way to absolutify relative links
+//   when reading stdin; output keeps relative hrefs. rdrview's -u resolves.
+//
+// Exported for test/contract/, which runs the real binary with this argv.
+export const TRAFILATURA_ARGS = ["--html", "--no-comments"];
+
+/**
+ * argv for rdrview on `url`.
+ *
+ * -H = output cleaned HTML, -u = base URL for relative-link resolution.
+ * No positional path/url means "read HTML from stdin" per rdrview(1).
+ * --disable-sandbox: macOS rdrview has no sandbox implemented; the flag is
+ * required there. Consequence: macOS users get an *unsandboxed* parse of
+ * attacker-controlled HTML. On Linux/BSD the seccomp/Pledge/Capsicum
+ * sandbox is left enabled. This asymmetry is the main reason trafilatura
+ * is probed first; revisit detection order if/when an rdrview brew formula
+ * (with a working macOS sandbox) lands.
+ *
+ * Exported for test/contract/, which runs the real binary with this argv.
+ */
+export function rdrviewArgs(url: string): string[] {
+  const args = ["-H", "-u", url];
+  if (process.platform === "darwin") args.push("--disable-sandbox");
+  return args;
+}
+
 let warnedNoExtractor = false;
 let warnedExtractorFailure = false;
 
@@ -56,30 +88,15 @@ export async function extractContent(html: string, url: string): Promise<string 
   }
   try {
     if (ex === "trafilatura") {
-      // --html: emit cleaned HTML so the existing pandoc/w3m step gives a single
-      //   canonical markdown style across extractor-on/off paths.
-      // --no-comments: drop user-comment threads (noise for our use case).
-      // Default precision/recall balance: --precision was tried but biases
-      //   toward dropping borderline content (tables, code blocks adjacent to
-      //   the article body). Revisit if chrome leakage is too high in practice.
-      // NOTE: trafilatura has no documented way to absolutify relative links
-      //   when reading stdin; output keeps relative hrefs. rdrview's -u resolves.
-      return await runCommand("trafilatura", ["--html", "--no-comments"], {
+      return await runCommand("trafilatura", TRAFILATURA_ARGS, {
         stdin: html,
         timeoutMs: EXTRACT_TIMEOUT_MS,
       });
     }
-    // rdrview: -H = output cleaned HTML, -u = base URL for relative-link resolution.
-    // No positional path/url means "read HTML from stdin" per rdrview(1).
-    // --disable-sandbox: macOS rdrview has no sandbox implemented; the flag is
-    // required there. Consequence: macOS users get an *unsandboxed* parse of
-    // attacker-controlled HTML. On Linux/BSD the seccomp/Pledge/Capsicum
-    // sandbox is left enabled. This asymmetry is the main reason trafilatura
-    // is probed first; revisit detection order if/when an rdrview brew formula
-    // (with a working macOS sandbox) lands.
-    const args = ["-H", "-u", url];
-    if (process.platform === "darwin") args.push("--disable-sandbox");
-    return await runCommand("rdrview", args, { stdin: html, timeoutMs: EXTRACT_TIMEOUT_MS });
+    return await runCommand("rdrview", rdrviewArgs(url), {
+      stdin: html,
+      timeoutMs: EXTRACT_TIMEOUT_MS,
+    });
   } catch (err) {
     if (!warnedExtractorFailure) {
       warnedExtractorFailure = true;

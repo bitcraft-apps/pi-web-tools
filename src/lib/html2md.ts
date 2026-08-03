@@ -5,6 +5,12 @@ const CONVERT_TIMEOUT_MS = 10_000;
 
 export type Converter = "pandoc" | "w3m";
 
+// Exported so test/contract/ can run the real binaries with this exact argv.
+// The unit tests in test/html2md.test.ts still assert the literals, so a wrong
+// edit here fails twice: once on shape, once against the installed converter.
+export const PANDOC_ARGS = ["-f", "html", "-t", "markdown_strict", "--wrap=none"];
+export const W3M_ARGS = ["-dump", "-T", "text/html", "-cols", "120"];
+
 export const detectConverter = probeOnce(async (): Promise<Converter | null> => {
   if (await commandExists("pandoc")) return "pandoc";
   if (await commandExists("w3m")) return "w3m";
@@ -68,10 +74,7 @@ export async function htmlToMarkdown(html: string): Promise<string> {
   // both pandoc and w3m output, and any future renderer, without per-
   // converter wiring. The cost is a single linear-time regex over a string
   // we already hold; see issue #127.
-  const args =
-    converter === "pandoc"
-      ? ["-f", "html", "-t", "markdown_strict", "--wrap=none"]
-      : ["-dump", "-T", "text/html", "-cols", "120"];
+  const args = converter === "pandoc" ? PANDOC_ARGS : W3M_ARGS;
   const raw = await runCommand(converter, args, {
     stdin: html,
     timeoutMs: CONVERT_TIMEOUT_MS,

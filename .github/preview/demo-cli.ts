@@ -46,6 +46,11 @@ function parseArgs(flag: string): { value?: string; num?: number } {
     if (rest.length > 1) die(`${command} takes one positional argument, got ${rest.length}`);
     return { value: rest[0] };
   }
+  // Reject `--limit 3 --limit 9` outright. Taking the first occurrence
+  // and letting the leftovers fall through to the positional count below
+  // reports "takes one positional argument, got 2", which points at the
+  // wrong thing entirely.
+  if (rest.lastIndexOf(flag) !== flagIndex) die(`${flag} given more than once`);
 
   const raw = rest[flagIndex + 1];
   if (raw === undefined) die(`${flag} requires a value`);

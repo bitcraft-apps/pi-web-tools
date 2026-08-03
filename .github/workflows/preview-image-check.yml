@@ -85,15 +85,22 @@ jobs:
       - name: Verify pi.image / pi.video point at tracked files
         run: |
           set -euo pipefail
+          # Same reasoning as head-check: report both fields, then fail
+          # once. A manifest edit that gets one URL wrong usually got the
+          # other wrong the same way.
+          failures=0
           for field in image video; do
-            url=$(node -e "
+            if ! url=$(node -e "
               const v = require('./package.json').pi['$field'];
               if (typeof v !== 'string' || v === '') {
                 console.error('ERROR: pi.$field is missing or not a string.');
                 process.exit(1);
               }
               console.log(v);
-            ")
+            "); then
+              failures=$((failures + 1))
+              continue
+            fi
             echo "pi.$field: $url"
             # Strip the raw.githubusercontent.com/<owner>/<repo>/<ref>/
             # prefix so we get the repo-relative path. Anchored regex —
@@ -103,15 +110,21 @@ jobs:
             if [ -z "$path" ]; then
               echo "ERROR: pi.$field does not match the expected raw.githubusercontent.com URL shape." >&2
               echo "       Got: $url" >&2
-              exit 1
+              failures=$((failures + 1))
+              continue
             fi
             echo "expected tree path: $path"
             if [ ! -f "$path" ]; then
               echo "ERROR: pi.$field points at $path but no such file exists in the PR tree." >&2
-              exit 1
+              failures=$((failures + 1))
+              continue
             fi
             echo "ok"
           done
+          if [ "$failures" -gt 0 ]; then
+            echo "ERROR: $failures of 2 manifest asset fields failed. See above." >&2
+            exit 1
+          fi
 
   # Post-merge / scheduled: actually HEAD the published URL. This is
   # what catches force-pushes, file renames done outside this repo,
@@ -126,18 +139,36 @@ jobs:
       - name: HEAD pi.image / pi.video URLs
         run: |
           set -euo pipefail
+          # Check both fields before failing, rather than exiting on the
+          # first bad one. The two assets break for the same reasons
+          # (force-push, rename, repo move), so they tend to break
+          # together — and this job runs post-merge, where aborting early
+          # means fixing pi.image, re-running, and only then learning
+          # pi.video was broken too.
+          failures=0
           for field in image video; do
-            url=$(node -e "
+            if ! url=$(node -e "
               const v = require('./package.json').pi['$field'];
               if (typeof v !== 'string' || v === '') {
                 console.error('ERROR: pi.$field is missing or not a string.');
                 process.exit(1);
               }
               console.log(v);
-            ")
+            "); then
+              failures=$((failures + 1))
+              continue
+            fi
             echo "checking pi.$field: $url"
             # -L follows redirects; -f makes 4xx/5xx exit non-zero.
             # --retry covers transient raw.githubusercontent.com hiccups.
-            curl -fsSLI --retry 3 --retry-delay 5 --max-time 20 "$url" >/dev/null
-            echo "ok"
+            if curl -fsSLI --retry 3 --retry-delay 5 --max-time 20 "$url" >/dev/null; then
+              echo "ok"
+            else
+              echo "ERROR: pi.$field did not resolve: $url" >&2
+              failures=$((failures + 1))
+            fi
           done
+          if [ "$failures" -gt 0 ]; then
+            echo "ERROR: $failures of 2 manifest asset URLs failed. See above." >&2
+            exit 1
+          fi

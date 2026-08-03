@@ -131,8 +131,9 @@ use the `.ts` extension rather than a `.js` shim.
 
 ```bash
 # PNGs:  capture → freeze → freshness check → pngquant → size floor
-# Video: preflight (font, tools, ddgr liveness) → vhs → freshness check
-#        → faststart re-mux → geometry/codec/duration/size checks
+# Video: preflight (font, tools, websearch+webfetch liveness) → vhs →
+#        freshness check → faststart re-mux →
+#        geometry/codec/duration/size checks
 # Exits non-zero if any step fails or a renderer leaves a stale asset.
 .github/preview/regen.sh                # everything (default)
 .github/preview/regen.sh websearch      # just the websearch PNG
@@ -150,10 +151,13 @@ git add .github/preview/websearch-output.ans .github/preview.png \
 git commit -m "chore(preview): refresh assets"
 ```
 
-The freshness checks (`asset -nt input`) are what prevent the silent-
-failure mode where `freeze` or `vhs` exits 0 without writing — don't
-replace the script with bare renderer invocations in CI or muscle
-memory.
+The freshness checks are what prevent the silent-failure mode where
+`freeze` or `vhs` exits 0 without writing — don't replace the script
+with bare renderer invocations in CI or muscle memory. The PNGs compare
+against their `.ans` fixture, which the same run just rewrote. The video
+has no such input (`demo.tape` is a committed static file that any stale
+MP4 is already newer than), so it compares against a marker stamped
+immediately before `vhs` runs.
 
 ### What regen.sh can't check: the row budget
 

@@ -149,25 +149,47 @@ if [ "$do_video" -eq 1 ]; then
     command -v "$bin" >/dev/null 2>&1 || { echo "ERROR: $bin not on PATH." >&2; exit 1; }
   done
 
-  # Liveness probe. VHS doesn't care what exit code the commands inside
-  # the tape return, so a rate-limited ddgr would record a card that
-  # says "no results" and still pass every check below. One cheap query
-  # up front turns that into a loud failure. renderWebsearch throws on
-  # an empty result set, so this exits non-zero exactly when it matters.
+  # Liveness probes, one per segment of the tape. VHS doesn't care what
+  # exit code the commands inside the tape return, so a rate-limited
+  # ddgr or a missing pandoc would record a card that says "no results"
+  # (or a frame of stack trace) and still pass every check below —
+  # geometry, codec, duration, and size are all blind to content. Two
+  # cheap calls up front turn that into a loud failure: renderWebsearch
+  # throws on an empty result set and renderWebfetch throws if the URL
+  # 404s or pandoc/w3m aren't on PATH, so these exit non-zero exactly
+  # when it matters.
   echo "      probing ddgr (a rate-limited search would record an empty card)"
   npx -y tsx "$here/demo-cli.ts" websearch --limit 1 >/dev/null
+  echo "      probing webfetch (a missing pandoc/w3m would record a stack trace)"
+  npx -y tsx "$here/demo-cli.ts" webfetch --max-chars 200 >/dev/null
+
+  # Scratch space for the freshness marker and the faststart re-mux.
+  # Both used to live next to the asset in .github/, where an ffmpeg
+  # failure left the temp file behind one `git add .github` from being
+  # committed.
+  video_tmp=$(mktemp -d)
+  trap 'rm -rf "$video_tmp"' EXIT
 
   echo "[2/5] vhs: rendering $mp4"
+  # Freshness reference. Not the tape: it's a committed static file, so a
+  # stale MP4 from an earlier regen is always newer than it and sails
+  # through the check below. (The PNG path can compare against its
+  # fixture because that fixture is rewritten in the same run.) Stamp a
+  # marker immediately before vhs instead, so the check asks the question
+  # we actually mean: did *this* run write the video?
+  marker="$video_tmp/marker"
+  touch "$marker"
   vhs "$tape"
 
-  echo "[3/5] verify: MP4 must be newer than the tape (vhs can fail silently)"
+  echo "[3/5] verify: MP4 must be newer than this run's marker (vhs can fail silently)"
   if [ ! -f "$mp4" ]; then
     echo "ERROR: $mp4 does not exist after vhs." >&2
     exit 1
   fi
-  if [ ! "$mp4" -nt "$tape" ]; then
-    echo "ERROR: $mp4 is not newer than $tape." >&2
-    echo "       vhs likely exited 0 without writing the video." >&2
+  if [ ! "$mp4" -nt "$marker" ]; then
+    echo "ERROR: $mp4 was not written by this run." >&2
+    echo "       vhs likely exited 0 without writing the video, leaving" >&2
+    echo "       the previous MP4 in place." >&2
     exit 1
   fi
 
@@ -176,7 +198,7 @@ if [ "$do_video" -eq 1 ]; then
   # until the whole thing downloads. Re-mux (no re-encode) to move it to
   # the front. Cheap and idempotent.
   echo "[4/5] ffmpeg: moving moov atom to the front (faststart)"
-  tmp_mp4="$mp4.faststart.mp4"
+  tmp_mp4="$video_tmp/faststart.mp4"
   ffmpeg -v error -y -i "$mp4" -c copy -movflags +faststart "$tmp_mp4"
   mv "$tmp_mp4" "$mp4"
 
@@ -200,6 +222,16 @@ if [ "$do_video" -eq 1 ]; then
   # ddgr/Wikipedia latency isn't. Outside this band means the tape
   # changed or a command died early and left dead air.
   duration=$(printf '%s\n' "$probe" | sed -nE 's/^duration=([0-9]+).*/\1/p')
+  # ffprobe reports `duration=N/A` for a container it can't measure (a
+  # truncated write, a missing moov atom). The sed above yields empty
+  # there, and `[ "" -lt 12 ]` dies with "integer expression expected"
+  # instead of anything a reader can act on.
+  if [ -z "$duration" ]; then
+    echo "ERROR: ffprobe reported no usable duration for $mp4." >&2
+    echo "       Usually a truncated or malformed container. ffprobe said:" >&2
+    printf '%s\n' "$probe" >&2
+    exit 1
+  fi
   if [ "$duration" -lt 12 ] || [ "$duration" -gt 45 ]; then
     echo "ERROR: duration is ${duration}s, expected 12–45s." >&2
     echo "       Too short usually means a command failed and Wait returned" >&2

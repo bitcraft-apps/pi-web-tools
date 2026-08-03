@@ -16,8 +16,14 @@ export const URL = "https://en.wikipedia.org/wiki/Unix_philosophy";
 // freeze.json renders at 1280×720 with 18px JetBrains Mono, line_height
 // 1.3, 40px top/bottom padding. That fits ~27 visible lines. Slice
 // slightly under that so the bottom isn't visually clipped mid-line.
-// demo.tape uses the same frame, so the same budget applies there.
 // If you bump freeze.json's height, bump this in lockstep.
+//
+// This budget governs the PNG only. demo.tape shares the frame geometry
+// but spends rows on the prompt and the typed command, leaving ~21 —
+// so 25 never binds there and this slice is not what keeps the video
+// from scrolling. `--max-chars 900` in the tape is. Don't read this
+// constant as covering the video; re-measure per the row-count snippet
+// in this directory's README when the tape's content changes.
 export const MAX_LINES = 25;
 
 // Roles must cover every theme.fg(role, …) call reachable from

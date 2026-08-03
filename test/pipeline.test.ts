@@ -1517,10 +1517,15 @@ describe("redirect re-validation (issue #57)", () => {
     await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
   });
 
-  // Pending until #56 lands (expanded RFC1918 blocklist). Once both PRs are
-  // merged, the existing localhost/loopback/link-local cases plus the new
-  // RFC1918 ranges all flow through the same revalidation path proven below.
-  it.todo("throws when 302 points at RFC1918 (depends on #56 expanded guard)");
+  it("throws when 302 points at RFC1918", async () => {
+    // 10.0.0.1 is matched only by the 10.0.0.0/8 branch of isBlockedV4, so
+    // this case fails if that range leaves the guard.
+    const mock = vi.fn().mockResolvedValueOnce(redirectResponse("http://10.0.0.1/internal"));
+    stubFetch(mock);
+
+    await expect(fetchAsMarkdown({ url: "https://example.com" })).rejects.toThrow(/blocked host/i);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
 
   it("throws when 302 points at localhost by name", async () => {
     const mock = vi.fn().mockResolvedValueOnce(redirectResponse("http://localhost:3000/admin"));

@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
 import { commandExists } from "./which.ts";
+import { runCommand } from "./run-command.ts";
 
 // Same backstop as html2md's CONVERT_TIMEOUT_MS. Note: webfetch now chains
 // extractor → pandoc/w3m, so worst-case subprocess time per HTML fetch is ~20s.
@@ -8,13 +8,6 @@ import { commandExists } from "./which.ts";
 const EXTRACT_TIMEOUT_MS = 10_000;
 
 export type Extractor = "trafilatura" | "rdrview";
-
-// 50 MB peak-memory backstop on extractor stdout. Trafilatura should emit
-// less than its input on every realistic page; this only fires on a runaway
-// extractor (or someone feeding it a 200 MB single-page HTML dump). Combined
-// with EXTRACT_TIMEOUT_MS this keeps a misbehaving extractor from doubling
-// peak heap (input HTML is already in memory in the caller).
-const EXTRACT_MAX_BYTES = 50 * 1024 * 1024;
 
 // Cached for the life of the process. A `null` result (no extractor on $PATH)
 // also sticks: an extractor installed mid-process won't be picked up until
@@ -42,66 +35,6 @@ export function __resetExtractorCache(): void {
   cachedDetection = undefined;
   warnedNoExtractor = false;
   warnedExtractorFailure = false;
-}
-
-function runExtractor(cmd: string, args: string[], stdin: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let child;
-    try {
-      child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
-    } catch (e) {
-      return reject(e);
-    }
-    // Collect Buffers and decode once at close: per-chunk toString("utf-8")
-    // mojibakes when a multi-byte codepoint straddles a chunk boundary.
-    // No setEncoding() on stdout/stderr, so chunks are always Buffers.
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let stdoutBytes = 0;
-    let overflowed = false;
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, EXTRACT_TIMEOUT_MS);
-
-    child.stdout.on("data", (c: Buffer) => {
-      stdoutBytes += c.length;
-      if (stdoutBytes > EXTRACT_MAX_BYTES) {
-        overflowed = true;
-        // Drop already-buffered chunks immediately so a misbehaving extractor
-        // in a long-lived agent process doesn't keep ~50 MB live until the
-        // close handler runs and the Promise rejects.
-        stdoutChunks.length = 0;
-        child.kill("SIGTERM");
-        return;
-      }
-      stdoutChunks.push(c);
-    });
-    child.stderr.on("data", (c: Buffer) => stderrChunks.push(c));
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (overflowed) return reject(new Error(`${cmd} stdout exceeded ${EXTRACT_MAX_BYTES} bytes`));
-      if (timedOut) return reject(new Error(`${cmd} timed out`));
-      if (code !== 0) {
-        const stderr = Buffer.concat(stderrChunks).toString("utf-8");
-        return reject(new Error(`${cmd} exited with code ${code}: ${stderr}`));
-      }
-      resolve(Buffer.concat(stdoutChunks).toString("utf-8"));
-    });
-
-    // Swallow EPIPE/ECONNRESET on stdin: extractor may exit before consuming
-    // the full input (timeout, overflow kill, crash, or just deciding it has
-    // enough). Without this handler node treats the writable's "error" as
-    // unhandled and crashes the process. The close/error/timeout paths above
-    // already produce the right Promise outcome.
-    child.stdin.on("error", () => {});
-    child.stdin.end(stdin);
-  });
 }
 
 /**
@@ -139,7 +72,10 @@ export async function extractContent(html: string, url: string): Promise<string 
       //   the article body). Revisit if chrome leakage is too high in practice.
       // NOTE: trafilatura has no documented way to absolutify relative links
       //   when reading stdin; output keeps relative hrefs. rdrview's -u resolves.
-      return await runExtractor("trafilatura", ["--html", "--no-comments"], html);
+      return await runCommand("trafilatura", ["--html", "--no-comments"], {
+        stdin: html,
+        timeoutMs: EXTRACT_TIMEOUT_MS,
+      });
     }
     // rdrview: -H = output cleaned HTML, -u = base URL for relative-link resolution.
     // No positional path/url means "read HTML from stdin" per rdrview(1).
@@ -151,7 +87,7 @@ export async function extractContent(html: string, url: string): Promise<string 
     // (with a working macOS sandbox) lands.
     const args = ["-H", "-u", url];
     if (process.platform === "darwin") args.push("--disable-sandbox");
-    return await runExtractor("rdrview", args, html);
+    return await runCommand("rdrview", args, { stdin: html, timeoutMs: EXTRACT_TIMEOUT_MS });
   } catch (err) {
     if (!warnedExtractorFailure) {
       warnedExtractorFailure = true;

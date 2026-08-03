@@ -1,4 +1,7 @@
-import { spawn } from "node:child_process";
+import { runCommandRaw } from "./run-command.ts";
+
+const NOT_INSTALLED =
+  "ddgr not installed. Run: brew install ddgr (mac) / pip install ddgr / apt install ddgr";
 
 export interface DdgrResult {
   title: string;
@@ -64,68 +67,27 @@ export async function runDdgr(
   limit: number,
   opts: RunDdgrOptions = {},
 ): Promise<DdgrResult[]> {
-  return new Promise((resolve, reject) => {
-    let child;
-    try {
-      child = spawn("ddgr", buildDdgrArgs(query, limit, opts), {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch (e: any) {
-      if (e.code === "ENOENT") {
-        return reject(
-          new Error(
-            "ddgr not installed. Run: brew install ddgr (mac) / pip install ddgr / apt install ddgr",
-          ),
-        );
-      }
-      return reject(e);
-    }
-
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let timedOut = false;
-
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, TIMEOUT_MS);
-
-    child.stdout.on("data", (c) => stdoutChunks.push(c));
-    child.stderr.on("data", (c) => stderrChunks.push(c));
-
-    child.on("error", (err: any) => {
-      clearTimeout(timer);
-      if (err.code === "ENOENT") {
-        return reject(
-          new Error(
-            "ddgr not installed. Run: brew install ddgr (mac) / pip install ddgr / apt install ddgr",
-          ),
-        );
-      }
-      reject(err);
+  let result;
+  try {
+    // No stdin: ddgr takes the query on argv. Exit code is deliberately not
+    // checked — ddgr exits non-zero in cases where it still printed usable
+    // JSON, so `runCommandRaw` (not `runCommand`) is the right primitive and
+    // empty stdout is our failure signal.
+    result = await runCommandRaw("ddgr", buildDdgrArgs(query, limit, opts), {
+      timeoutMs: TIMEOUT_MS,
+      timeoutMessage:
+        "DuckDuckGo timed out (likely rate-limited). Try again in a minute or use webfetch with a known URL.",
     });
-
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        return reject(
-          new Error(
-            "DuckDuckGo timed out (likely rate-limited). Try again in a minute or use webfetch with a known URL.",
-          ),
-        );
-      }
-      const stdout = Buffer.concat(stdoutChunks).toString("utf-8").trim();
-      if (!stdout) {
-        const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
-        return reject(
-          new Error(`ddgr produced no output (exit ${code}): ${stderr || "(empty stderr)"}`),
-        );
-      }
-      try {
-        resolve(parseOutput(stdout, limit));
-      } catch (e) {
-        reject(e);
-      }
-    });
-  });
+  } catch (e: any) {
+    // Covers both spawn failure paths: the synchronous throw and the `error`
+    // event. `runCommandRaw` rejects with the raw error, so `code` survives.
+    if (e?.code === "ENOENT") throw new Error(NOT_INSTALLED, { cause: e });
+    throw e;
+  }
+  const stdout = result.stdout.trim();
+  if (!stdout) {
+    const stderr = result.stderr.trim();
+    throw new Error(`ddgr produced no output (exit ${result.code}): ${stderr || "(empty stderr)"}`);
+  }
+  return parseOutput(stdout, limit);
 }

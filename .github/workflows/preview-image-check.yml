@@ -1,16 +1,20 @@
 name: preview-image-check
 
-# pi.image in package.json is pinned to a raw.githubusercontent.com URL
-# on `main`. A future force-push, rename, or repo move would 404 the
-# gallery thumbnail at https://pi.dev/packages and we'd only notice
-# when someone visits the page. This workflow guards against that in
-# two complementary ways:
+# pi.image and pi.video in package.json are pinned to
+# raw.githubusercontent.com URLs on `main`. A future force-push,
+# rename, or repo move would 404 the gallery card at
+# https://pi.dev/packages and we'd only notice when someone visits the
+# page. Both fields are checked; pi.video takes precedence in the
+# gallery, and pi.image is the fallback for clients that don't render
+# video, so either one breaking is a real regression.
+#
+# This workflow guards against that in two complementary ways:
 #
 #   1. tree-check (pull_request)
-#      Verifies the file path implied by pi.image exists in the PR's
-#      working tree. No network: the PR branch's PNG isn't on
+#      Verifies the file path implied by each URL exists in the PR's
+#      working tree. No network: the PR branch's assets aren't on
 #      raw.githubusercontent.com yet, so HEADing main here would
-#      either pass on stale state (PR renames the file but pi.image
+#      either pass on stale state (PR renames a file but the manifest
 #      still points at the old URL — old URL still 200s pre-merge) or
 #      fail spuriously (PR introduces the file for the first time —
 #      main 404s until merge). The tree check sidesteps both.
@@ -21,22 +25,26 @@ name: preview-image-check
 #        - infra-side breakage like raw.githubusercontent.com outages
 #          or asset renames done outside this repo
 #
-# Residual gap: a PR that renames the PNG file without updating
-# pi.image will pass tree-check (file exists at new path) and pass
+# Residual gap: a PR that renames an asset without updating the
+# manifest will pass tree-check (file exists at new path) and pass
 # head-check pre-merge (old URL still resolves on main), then fail
 # head-check immediately post-merge. Acceptable: the failure is loud
 # and lands within minutes of the merge.
 #
 # What this workflow does NOT guard:
 #
-# `.github/webfetch.png` is referenced from README.md but not from
-# pi.image. A missing inline README image is self-evident the next
+# `.github/webfetch.png` is referenced from README.md but not from the
+# pi manifest. A missing inline README image is self-evident the next
 # time anyone opens the README on GitHub or npm — different failure
-# mode from pi.image (whose breakage is invisible to the maintainer
-# because only pi.dev visitors see it). webfetch.png is included in
-# the `paths:` triggers below so adjacent edits still run the
-# pi.image-focused checks, but no separate HEAD/tree check exists
+# mode from pi.image/pi.video (whose breakage is invisible to the
+# maintainer because only pi.dev visitors see it). webfetch.png is
+# included in the `paths:` triggers below so adjacent edits still run
+# the manifest-focused checks, but no separate HEAD/tree check exists
 # for it. See issue #117 for the decision.
+#
+# Nor does it guard *content*: a video that renders but shows garbage
+# (missing font, empty search results) still 200s. Those failure modes
+# are caught at regen time by .github/preview/regen.sh.
 
 on:
   push:
@@ -44,12 +52,14 @@ on:
     paths:
       - "package.json"
       - ".github/preview.png"
+      - ".github/preview.mp4"
       - ".github/webfetch.png"
       - ".github/workflows/preview-image-check.yml"
   pull_request:
     paths:
       - "package.json"
       - ".github/preview.png"
+      - ".github/preview.mp4"
       - ".github/webfetch.png"
       - ".github/workflows/preview-image-check.yml"
   schedule:
@@ -61,10 +71,10 @@ permissions:
   contents: read
 
 jobs:
-  # PR-only: verify the PNG exists in the tree at the path implied by
-  # pi.image. Doesn't hit the network — the PR branch's asset isn't
-  # published yet. Sole purpose is catching pi.image edits that point
-  # at a path that doesn't exist in the same PR.
+  # PR-only: verify each asset exists in the tree at the path implied
+  # by its manifest URL. Doesn't hit the network — the PR branch's
+  # assets aren't published yet. Sole purpose is catching manifest
+  # edits that point at a path that doesn't exist in the same PR.
   tree-check:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -72,27 +82,49 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Verify pi.image points at a tracked file
+      - name: Verify pi.image / pi.video point at tracked files
         run: |
           set -euo pipefail
-          url=$(node -e 'console.log(require("./package.json").pi.image)')
-          echo "pi.image: $url"
-          # Strip the raw.githubusercontent.com/<owner>/<repo>/<ref>/
-          # prefix so we get the repo-relative path. Anchored regex —
-          # if the URL shape ever changes (e.g. someone switches to a
-          # CDN), this fails loudly rather than silently mis-checking.
-          path=$(printf '%s' "$url" | sed -nE 's|^https://raw\.githubusercontent\.com/[^/]+/[^/]+/[^/]+/(.+)$|\1|p')
-          if [ -z "$path" ]; then
-            echo "ERROR: pi.image does not match the expected raw.githubusercontent.com URL shape." >&2
-            echo "       Got: $url" >&2
+          # Same reasoning as head-check: report both fields, then fail
+          # once. A manifest edit that gets one URL wrong usually got the
+          # other wrong the same way.
+          failures=0
+          for field in image video; do
+            if ! url=$(node -e "
+              const v = require('./package.json').pi['$field'];
+              if (typeof v !== 'string' || v === '') {
+                console.error('ERROR: pi.$field is missing or not a string.');
+                process.exit(1);
+              }
+              console.log(v);
+            "); then
+              failures=$((failures + 1))
+              continue
+            fi
+            echo "pi.$field: $url"
+            # Strip the raw.githubusercontent.com/<owner>/<repo>/<ref>/
+            # prefix so we get the repo-relative path. Anchored regex —
+            # if the URL shape ever changes (e.g. someone switches to a
+            # CDN), this fails loudly rather than silently mis-checking.
+            path=$(printf '%s' "$url" | sed -nE 's|^https://raw\.githubusercontent\.com/[^/]+/[^/]+/[^/]+/(.+)$|\1|p')
+            if [ -z "$path" ]; then
+              echo "ERROR: pi.$field does not match the expected raw.githubusercontent.com URL shape." >&2
+              echo "       Got: $url" >&2
+              failures=$((failures + 1))
+              continue
+            fi
+            echo "expected tree path: $path"
+            if [ ! -f "$path" ]; then
+              echo "ERROR: pi.$field points at $path but no such file exists in the PR tree." >&2
+              failures=$((failures + 1))
+              continue
+            fi
+            echo "ok"
+          done
+          if [ "$failures" -gt 0 ]; then
+            echo "ERROR: $failures of 2 manifest asset fields failed. See above." >&2
             exit 1
           fi
-          echo "expected tree path: $path"
-          if [ ! -f "$path" ]; then
-            echo "ERROR: pi.image points at $path but no such file exists in the PR tree." >&2
-            exit 1
-          fi
-          echo "ok"
 
   # Post-merge / scheduled: actually HEAD the published URL. This is
   # what catches force-pushes, file renames done outside this repo,
@@ -104,12 +136,39 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: HEAD pi.image URL
+      - name: HEAD pi.image / pi.video URLs
         run: |
           set -euo pipefail
-          url=$(node -e 'console.log(require("./package.json").pi.image)')
-          echo "checking: $url"
-          # -L follows redirects; -f makes 4xx/5xx exit non-zero.
-          # --retry covers transient raw.githubusercontent.com hiccups.
-          curl -fsSLI --retry 3 --retry-delay 5 --max-time 20 "$url" >/dev/null
-          echo "ok"
+          # Check both fields before failing, rather than exiting on the
+          # first bad one. The two assets break for the same reasons
+          # (force-push, rename, repo move), so they tend to break
+          # together — and this job runs post-merge, where aborting early
+          # means fixing pi.image, re-running, and only then learning
+          # pi.video was broken too.
+          failures=0
+          for field in image video; do
+            if ! url=$(node -e "
+              const v = require('./package.json').pi['$field'];
+              if (typeof v !== 'string' || v === '') {
+                console.error('ERROR: pi.$field is missing or not a string.');
+                process.exit(1);
+              }
+              console.log(v);
+            "); then
+              failures=$((failures + 1))
+              continue
+            fi
+            echo "checking pi.$field: $url"
+            # -L follows redirects; -f makes 4xx/5xx exit non-zero.
+            # --retry covers transient raw.githubusercontent.com hiccups.
+            if curl -fsSLI --retry 3 --retry-delay 5 --max-time 20 "$url" >/dev/null; then
+              echo "ok"
+            else
+              echo "ERROR: pi.$field did not resolve: $url" >&2
+              failures=$((failures + 1))
+            fi
+          done
+          if [ "$failures" -gt 0 ]; then
+            echo "ERROR: $failures of 2 manifest asset URLs failed. See above." >&2
+            exit 1
+          fi

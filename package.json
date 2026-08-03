@@ -17,6 +17,7 @@
     "extensions": [
       "./index.ts"
     ],
+    "video": "https://raw.githubusercontent.com/bitcraft-apps/pi-web-tools/main/.github/preview.mp4",
     "image": "https://raw.githubusercontent.com/bitcraft-apps/pi-web-tools/main/.github/preview.png"
   },
   "files": [

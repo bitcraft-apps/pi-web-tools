@@ -1,9 +1,9 @@
 // Fetch stubbing seam for webfetch tests.
 //
-// `doFetch` calls the *installed* undici's `fetch`, not Node's global one, so
-// `vi.stubGlobal("fetch", ...)` no longer intercepts anything — a global stub
-// would let the request escape to the real network. Tests install their fake
-// through `__setFetchForTesting` instead.
+// `doFetch` in src/lib/http.ts calls the *installed* undici's `fetch`, not
+// Node's global one, so `vi.stubGlobal("fetch", ...)` no longer intercepts
+// anything — a global stub would let the request escape to the real network.
+// Tests install their fake through `__setFetchForTesting` instead.
 //
 // The cast lives here rather than at ~33 call sites: test fakes return the
 // global `Response`, while the seam is typed as undici's `fetch`. At runtime
@@ -14,7 +14,7 @@
 // one documented cast beats scattering `as any`.
 
 import type { fetch as undiciFetch } from "undici";
-import { __setFetchForTesting } from "../../src/webfetch.js";
+import { __setFetchForTesting } from "../../src/lib/http.js";
 
 /**
  * A test's stand-in for `fetch`. Arguments match undici's real signature so

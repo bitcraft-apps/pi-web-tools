@@ -94,6 +94,9 @@ bun run lint                # oxlint + type-aware oxlint-tsgolint; CI runs this 
 bun run format              # apply oxfmt to src/, test/, index.ts, vitest.config.ts
 bun run format:check        # CI runs this before lint; fails if anything is unformatted
 bun run test                # unit tests, no network
+bun run test:contract       # run the real external CLIs (pandoc, w3m, trafilatura, rdrview, pdftotext, ddgr);
+                            #   skips any binary you do not have installed. PI_CONTRACT_STRICT=1 makes a
+                            #   missing binary a failure, PI_CONTRACT_NETWORK=1 adds one live DuckDuckGo query
 bash scripts/metrics.sh     # passive health signals (npm + GitHub) and upstream pi drift; on-demand, no state
 ```
 

@@ -49,6 +49,7 @@
   "scripts": {
     "test": "vitest --run",
     "test:watch": "vitest",
+    "test:contract": "vitest --run test/contract",
     "typecheck": "tsgo --noEmit -p tsconfig.json",
     "lint": "oxlint --deny-warnings",
     "format": "oxfmt src/ test/ index.ts vitest.config.ts",

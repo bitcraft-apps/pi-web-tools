@@ -13,6 +13,19 @@ let warnedPdftotextFailure = false;
 
 export const detectPdftotext = probeOnce(() => commandExists("pdftotext"));
 
+// `-layout`: preserve physical layout of the page. For prose this is
+//   marginally worse than the default reading-order mode (extra
+//   whitespace), but for the things people actually feed webfetch PDFs to
+//   read — papers with two-column layouts, datasheets, tables in RFCs —
+//   `-layout` is the difference between readable text and a
+//   column-interleaved word salad.
+// `-enc UTF-8`: pdftotext's default is the platform locale; force UTF-8 so
+//   downstream consumers don't get cp1252 or whatever LANG=C decides.
+// `- -`: stdin → stdout. No temp files.
+//
+// Exported for test/contract/, which runs the real binary with this argv.
+export const PDFTOTEXT_ARGS = ["-layout", "-enc", "UTF-8", "-", "-"];
+
 /** Test-only: clear the cached detection and the one-shot warning latches. */
 export function __resetPdftotextCache(): void {
   detectPdftotext.reset();
@@ -51,16 +64,7 @@ export async function pdfToText(buf: ArrayBuffer): Promise<string | null> {
     return null;
   }
   try {
-    // `-layout`: preserve physical layout of the page. For prose this is
-    //   marginally worse than the default reading-order mode (extra
-    //   whitespace), but for the things people actually feed webfetch PDFs to
-    //   read — papers with two-column layouts, datasheets, tables in RFCs —
-    //   `-layout` is the difference between readable text and a
-    //   column-interleaved word salad.
-    // `-enc UTF-8`: pdftotext's default is the platform locale; force UTF-8 so
-    //   downstream consumers don't get cp1252 or whatever LANG=C decides.
-    // `- -`: stdin → stdout. No temp files.
-    return await runCommand("pdftotext", ["-layout", "-enc", "UTF-8", "-", "-"], {
+    return await runCommand("pdftotext", PDFTOTEXT_ARGS, {
       stdin: new Uint8Array(buf),
       timeoutMs: PDFTOTEXT_TIMEOUT_MS,
     });

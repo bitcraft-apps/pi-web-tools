@@ -32,3 +32,23 @@ export async function commandExists(cmd: string): Promise<boolean> {
     }
   });
 }
+
+/**
+ * Wrap an async probe so it runs at most once per process.
+ *
+ * The *promise* is cached, so concurrent callers share a single probe. A
+ * negative result (`false`, `null`) sticks just like a positive one: a binary
+ * installed mid-process won't be picked up until restart. That's acceptable for
+ * an agent process; do not "fix" it by re-probing.
+ *
+ * `reset()` is a test-only seam — it lets a suite exercise both the
+ * binary-present and binary-absent paths in one process.
+ */
+export function probeOnce<T>(fn: () => Promise<T>): (() => Promise<T>) & { reset(): void } {
+  let cached: Promise<T> | undefined;
+  const probe = () => (cached ??= fn());
+  probe.reset = () => {
+    cached = undefined;
+  };
+  return probe;
+}

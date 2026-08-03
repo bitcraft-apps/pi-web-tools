@@ -1,25 +1,19 @@
-import { commandExists } from "./which.ts";
+import { commandExists, probeOnce } from "./which.ts";
 import { runCommand } from "./run-command.ts";
 
 const CONVERT_TIMEOUT_MS = 10_000;
 
 export type Converter = "pandoc" | "w3m";
 
-let cachedDetection: Promise<Converter | null> | undefined;
-
-export async function detectConverter(): Promise<Converter | null> {
-  if (cachedDetection !== undefined) return cachedDetection;
-  cachedDetection = (async () => {
-    if (await commandExists("pandoc")) return "pandoc";
-    if (await commandExists("w3m")) return "w3m";
-    return null;
-  })();
-  return cachedDetection;
-}
+export const detectConverter = probeOnce(async (): Promise<Converter | null> => {
+  if (await commandExists("pandoc")) return "pandoc";
+  if (await commandExists("w3m")) return "w3m";
+  return null;
+});
 
 /** Test-only: clear the cached converter detection. */
 export function __resetConverterCache(): void {
-  cachedDetection = undefined;
+  detectConverter.reset();
 }
 
 // Match base64-encoded `data:` URIs, capturing the MIME type and any

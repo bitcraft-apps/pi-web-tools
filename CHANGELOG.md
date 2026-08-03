@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.5.0...v1.5.1) (2026-08-03)
+
+
+### Bug Fixes
+
+* satisfy OpenAI/Codex strict schema validation ([#242](https://github.com/bitcraft-apps/pi-web-tools/issues/242)) ([7e04780](https://github.com/bitcraft-apps/pi-web-tools/commit/7e047809fc697a5889c594f25e1bcaf5dff48ffc))
+
 ## [1.5.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.4.0...v1.5.0) (2026-08-03)
 
 

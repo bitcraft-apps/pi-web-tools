@@ -9,16 +9,35 @@ import { EventEmitter } from "node:events";
 import { Readable, Writable } from "node:stream";
 import { isWhichSpawn, whichSpawnTarget } from "./_helpers/spawn.js";
 
-function fakeChild(stdoutText: string, exitCode = 0) {
+function fakeChild(stdoutText: string, exitCode = 0, stderrText = "") {
+  // Readable.from([string]) yields strings; the implementation expects Buffers
+  // (matches real `spawn` behavior with no setEncoding call).
+  return fakeChildFromChunks([Buffer.from(stdoutText, "utf-8")], exitCode, stderrText);
+}
+
+/**
+ * Like `fakeChild`, but lets the caller control the exact stdout chunking —
+ * needed to model a multi-byte codepoint split across two reads.
+ */
+function fakeChildFromChunks(stdoutChunks: Buffer[], exitCode = 0, stderrText = "") {
   const ee: any = new EventEmitter();
-  ee.stdout = Readable.from([stdoutText]);
-  ee.stderr = Readable.from([""]);
+  ee.stdout = Readable.from(stdoutChunks);
+  ee.stderr = Readable.from([Buffer.from(stderrText, "utf-8")]);
   ee.stdin = new Writable({
     write(_c, _e, cb) {
       cb();
     },
   });
-  setImmediate(() => ee.emit("close", exitCode));
+  ee.kill = () => {};
+  // Emit "close" *after* stdout drains, so the implementation's data handlers
+  // have populated stdoutChunks before close fires. resume() forces flow even
+  // when the consumer (e.g. commandExists) doesn't attach a data listener —
+  // mirrors real `spawn`, where the OS pipe closes regardless of consumption.
+  ee.stdout.on("end", () => ee.emit("close", exitCode));
+  setImmediate(() => {
+    ee.stdout.resume();
+    ee.stderr.resume();
+  });
   return ee;
 }
 
@@ -115,6 +134,121 @@ describe("htmlToMarkdown", () => {
       '<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA">',
     );
     expect(md).toBe("Image: data:image/png;base64,…\n");
+  });
+
+  it("decodes multi-byte codepoints split across stdout chunks (no mojibake)", async () => {
+    // "# Café — naïve\n" chopped mid-sequence: the first chunk ends halfway
+    // through the é, and the em dash is split too. Per-chunk toString("utf-8")
+    // turns both into U+FFFD; decoding once at close does not.
+    const full = Buffer.from("# Café — naïve\n", "utf-8");
+    const eAcuteStart = full.indexOf(0xc3); // first byte of "é"
+    const emDashMid = full.indexOf(0x80, full.indexOf(0xe2)); // middle of "—"
+    const chunks = [
+      full.subarray(0, eAcuteStart + 1),
+      full.subarray(eAcuteStart + 1, emDashMid),
+      full.subarray(emDashMid),
+    ];
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
+      if (isWhichSpawn(cmd, args, "pandoc")) return fakeChild("/usr/bin/pandoc\n", 0);
+      if (cmd === "pandoc") return fakeChildFromChunks(chunks, 0);
+      return fakeChild("", 1);
+    });
+    const md = await htmlToMarkdown("<h1>Café — naïve</h1>");
+    expect(md).toBe("# Café — naïve\n");
+    expect(md).not.toContain("�");
+  });
+
+  it("rejects when converter stdout exceeds the byte cap (overflow path)", async () => {
+    // Two 30 MB chunks → 60 MB, over the 50 MB cap. The first chunk is under
+    // it; the second trips the overflow branch, which kills the child and
+    // rejects with the cap message.
+    function overflowChild() {
+      const ee: any = new EventEmitter();
+      const big = Buffer.alloc(30 * 1024 * 1024);
+      ee.stdout = Readable.from([big, big]);
+      ee.stderr = Readable.from([Buffer.alloc(0)]);
+      ee.stdin = new Writable({
+        write(_c, _e, cb) {
+          cb();
+        },
+      });
+      ee.kill = () => {};
+      ee.stdout.on("end", () => ee.emit("close", null));
+      setImmediate(() => {
+        ee.stdout.resume();
+        ee.stderr.resume();
+      });
+      return ee;
+    }
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
+      if (isWhichSpawn(cmd, args, "pandoc")) return fakeChild("/usr/bin/pandoc\n", 0);
+      if (cmd === "pandoc") return overflowChild();
+      return fakeChild("", 1);
+    });
+    await expect(htmlToMarkdown("<p>x</p>")).rejects.toThrow(/stdout exceeded/i);
+  });
+
+  it("survives a converter that closes before stdin.end() (EPIPE on write)", async () => {
+    // Models a converter killed / crashed mid-input. The implementation must
+    // attach stdin.on("error", ...) before .end(), otherwise the EPIPE bubbles
+    // to an unhandled "error" event on the Writable and takes down the process.
+    function fakeChildEpipeOnStdin(exitCode = 1) {
+      const ee: any = new EventEmitter();
+      ee.stdout = Readable.from([Buffer.alloc(0)]);
+      ee.stderr = Readable.from([Buffer.alloc(0)]);
+      ee.stdin = new Writable({
+        write(_c, _e, cb) {
+          const err: any = new Error("write EPIPE");
+          err.code = "EPIPE";
+          cb(err);
+        },
+      });
+      ee.kill = () => {};
+      // Close fires before stdin.end() is called by the implementation.
+      process.nextTick(() => ee.emit("close", exitCode));
+      return ee;
+    }
+    vi.mocked(spawn).mockImplementation((cmd, args) => {
+      if (isWhichSpawn(cmd, args, "pandoc")) return fakeChild("/usr/bin/pandoc\n", 0);
+      if (cmd === "pandoc") return fakeChildEpipeOnStdin(1);
+      return fakeChild("", 1);
+    });
+    await expect(htmlToMarkdown("<p>x</p>")).rejects.toThrow(/exited with code 1/);
+  });
+
+  it("rejects when the converter exceeds the timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      // Child that never closes on its own — only kill() (from the timeout
+      // branch) makes it close.
+      function hangingChild() {
+        const ee: any = new EventEmitter();
+        ee.stdout = new Readable({ read() {} });
+        ee.stderr = new Readable({ read() {} });
+        ee.stdin = new Writable({
+          write(_c, _e, cb) {
+            cb();
+          },
+        });
+        ee.kill = () => {
+          ee.stdout.push(null);
+          ee.stderr.push(null);
+          setImmediate(() => ee.emit("close", null));
+        };
+        return ee;
+      }
+      vi.mocked(spawn).mockImplementation((cmd, args) => {
+        if (isWhichSpawn(cmd, args, "pandoc")) return fakeChild("/usr/bin/pandoc\n", 0);
+        if (cmd === "pandoc") return hangingChild();
+        return fakeChild("", 1);
+      });
+      const p = htmlToMarkdown("<p>x</p>");
+      const assertion = expect(p).rejects.toThrow(/timed out/i);
+      await vi.advanceTimersByTimeAsync(11_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

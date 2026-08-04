@@ -26,8 +26,8 @@ updates:
   #
   # Coverage did not exist at all until #171, which is why every
   # devDependency quietly drifted for ~3 months: oxlint 13 minors behind,
-  # oxfmt 13 minors, vitest a full major, and @typescript/native-preview well
-  # past the "roughly weekly" refresh its own comment in ci.yml promises.
+  # oxfmt 13 minors, vitest a full major, and the type-checker weeks behind
+  # the refresh cadence its own comment in ci.yml promised at the time.
   # Nothing was ever going to enforce that by hand.
   #
   # Grouping mirrors the pinning policy already documented in ci.yml rather
@@ -51,7 +51,7 @@ updates:
       # scripts/metrics.sh owns this pin instead. See #163, #164.
       - dependency-name: "typebox"
       # @types/node tracks the `engines.node` floor (>=22), not npm latest.
-      # Types describing a newer Node than we support would let tsgo accept
+      # Types describing a newer Node than we support would let tsc accept
       # APIs missing on the oldest runtime we claim to run on, and the
       # node-matrix job only catches that if a test happens to exercise them.
       # Bump this deliberately, in the same PR that raises `engines`.
@@ -67,13 +67,14 @@ updates:
           - "oxlint"
           - "oxlint-tsgolint"
           - "oxfmt"
-      # Preview channel, no semver, daily dev builds. Kept in its own group so
-      # it stays independently pinnable and revertable — ci.yml documents an
-      # escape hatch for when tsgo regresses, and that is unusable if a tsgo
-      # revert also reverts a formatting sweep.
-      tsgo:
+      # The type-checker keeps its own group so it stays independently pinnable
+      # and revertable. A TypeScript bump can change diagnostics, and ci.yml
+      # documents an escape hatch for that. The hatch is unusable if the revert
+      # also reverts a formatting sweep. This group replaced the `tsgo` group
+      # in #222, when @typescript/native-preview gave way to TypeScript 7.
+      typescript:
         patterns:
-          - "@typescript/native-preview"
+          - "typescript"
       # vitest gets its own group so a framework major always arrives alone.
       # Grouped with everything else it took an innocuous @types/node bump down
       # with it: 8 failures, all from vitest 4 spy/mock lifecycle changes, on a
@@ -90,6 +91,6 @@ updates:
           - "oxlint"
           - "oxlint-tsgolint"
           - "oxfmt"
-          - "@typescript/native-preview"
+          - "typescript"
           - "vitest"
           - "@vitest/*"

@@ -89,7 +89,7 @@ You don't call them directly — pi's agent calls them when it needs.
 git clone https://github.com/bitcraft-apps/pi-web-tools
 cd pi-web-tools
 bun install
-bun run typecheck           # type-check via tsgo (@typescript/native-preview); CI runs this before tests
+bun run typecheck           # type-check via tsc (typescript 7, native); CI runs this before tests
 bun run lint                # oxlint + type-aware oxlint-tsgolint; CI runs this before tests
 bun run format              # apply oxfmt to src/, test/, index.ts, vitest.config.ts
 bun run format:check        # CI runs this before lint; fails if anything is unformatted

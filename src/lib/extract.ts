@@ -11,7 +11,6 @@ export type Extractor = "trafilatura" | "rdrview";
 
 // --html: emit cleaned HTML so the existing pandoc/w3m step gives a single
 //   canonical markdown style across extractor-on/off paths.
-// --no-comments: drop user-comment threads (noise for our use case).
 // Default precision/recall balance: --precision was tried but biases
 //   toward dropping borderline content (tables, code blocks adjacent to
 //   the article body). Revisit if chrome leakage is too high in practice.
@@ -19,7 +18,7 @@ export type Extractor = "trafilatura" | "rdrview";
 //   when reading stdin; output keeps relative hrefs. rdrview's -u resolves.
 //
 // Exported for test/contract/, which runs the real binary with this argv.
-export const TRAFILATURA_ARGS = ["--html", "--no-comments"];
+export const TRAFILATURA_ARGS = ["--html"];
 
 /**
  * argv for rdrview on `url`.

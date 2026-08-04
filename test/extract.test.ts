@@ -120,7 +120,7 @@ describe("detectExtractor", () => {
 });
 
 describe("extractContent", () => {
-  it("invokes trafilatura with --html --no-comments and returns its stdout", async () => {
+  it("invokes trafilatura with --html and returns its stdout", async () => {
     vi.mocked(spawn).mockImplementation((cmd, args) => {
       if (isWhichSpawn(cmd, args, "trafilatura")) return fakeChild("/x\n", 0);
       if (cmd === "trafilatura") return fakeChild("<article>clean</article>", 0);
@@ -130,7 +130,7 @@ describe("extractContent", () => {
     expect(out).toBe("<article>clean</article>");
     const trafCall = vi.mocked(spawn).mock.calls.find((c) => c[0] === "trafilatura");
     expect(trafCall).toBeTruthy();
-    expect(trafCall![1]).toEqual(["--html", "--no-comments"]);
+    expect(trafCall![1]).toEqual(["--html"]);
   });
 
   it("invokes rdrview with -H -u <url> and platform-conditional --disable-sandbox", async () => {

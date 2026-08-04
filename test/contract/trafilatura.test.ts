@@ -27,10 +27,10 @@ contract("trafilatura", () => {
     // Without the flag trafilatura emits plain text and this fails.
     expect(out).toMatch(/<p>/);
 
-    // Not asserted: `--no-comments`. Measured on trafilatura 2.0.0, the flag has
-    // no observable effect under `--html`: that mode emits the main body only, so
-    // a comment section is already absent with or without it. The flag does work
-    // in plain-text mode, which this package never uses. An assertion here would
-    // therefore pass whether or not we still pass the flag.
+    // No comment-removal assertion: `--no-comments` was dropped in #238 because
+    // `--html` emits the main body only, so a comment section is already absent
+    // with or without it (measured on trafilatura 2.0.0; the flag only bites in
+    // plain-text mode, which this package never uses). The assertions above are
+    // what make that removal safe — none of them depended on the flag.
   });
 });

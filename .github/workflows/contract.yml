@@ -19,6 +19,12 @@ name: contract
 # still names the snippet field `abstract`). It runs on the weekly schedule and
 # on manual dispatch only: DuckDuckGo rate-limits shared runner IPs, and a red PR
 # caused by a rate limit teaches contributors to ignore this job.
+#
+# The `rdrview-pin-drift` job is the refresh cadence for RDRVIEW_SHA. Every other
+# pinned version in this repo ages through Dependabot, but a SHA in a `run:` step
+# is invisible to it. The job compares the pin against upstream master on the same
+# weekly cron. It is a separate job on purpose: a stale pin must never look like a
+# broken argv. See #237.
 
 on:
   pull_request:
@@ -31,6 +37,12 @@ on:
 
 permissions:
   contents: read
+
+# Workflow level, not step level: two jobs read this value — the source build and
+# the drift check that ages it. One definition means the drift check can never
+# compare a SHA the build does not use.
+env:
+  RDRVIEW_SHA: 93c3c59e61868f3de76984d59c272b9bc6af0159
 
 concurrency:
   group: contract-${{ github.ref }}
@@ -68,9 +80,15 @@ jobs:
       # the only install route, which is also why src/lib/extract.ts probes
       # trafilatura first. Pinned to a commit: upstream tags are rare, and an
       # unpinned clone would make this job's result depend on the day.
+      #
+      # Refresh cadence: the `rdrview-pin-drift` job below, on the weekly cron.
+      # That job is the trigger — there is no manual pass to remember. When it
+      # goes red, set RDRVIEW_SHA to the SHA it reports, in its own PR. The
+      # contract job on that PR is the proof that the argv still holds.
+      #
+      # As of 2026-08 the pin is tag v0.1.5 and also master HEAD, so the pin and
+      # a fresh user `make` build are the same bytes. See #237.
       - name: Build rdrview from source
-        env:
-          RDRVIEW_SHA: 93c3c59e61868f3de76984d59c272b9bc6af0159
         run: |
           git clone --filter=blob:none https://github.com/eafer/rdrview.git /tmp/rdrview
           cd /tmp/rdrview
@@ -101,3 +119,58 @@ jobs:
           PI_CONTRACT_NETWORK:
             ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '1' ||
             '0' }}
+
+  # The cadence for the RDRVIEW_SHA pin above (#237). Users install rdrview by
+  # building master, so the contract job only proves something about the rdrview
+  # users have if the pin tracks master.
+  #
+  # Its own job, not a step in `contract`: a red drift check must stay
+  # distinguishable from a red contract job. Merging the two gives the exact
+  # signal #237 refuses — a failure that could be either a broken argv or an
+  # upstream commit that landed this morning.
+  #
+  # `schedule` and `workflow_dispatch` only. Upstream activity must not redden a
+  # PR or a merge to main. The check reports on the Monday cron, and GitHub mails
+  # the maintainer when a scheduled run fails. It fails instead of warning: a
+  # warning annotation on a cron run is read by nobody.
+  #
+  # NOT a required status check. `contract` is (.github/branch-protection.md); this
+  # job is skipped on pull requests, so requiring it would block every merge on a
+  # check that never reports.
+  rdrview-pin-drift:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      # No checkout: `git ls-remote` needs no local repo, and RDRVIEW_SHA comes
+      # from the workflow env.
+      - name: Compare the pin against upstream master
+        run: |
+          set -euo pipefail
+          upstream=$(git ls-remote https://github.com/eafer/rdrview.git refs/heads/master | cut -f1)
+          # ls-remote exits 0 and prints nothing when the ref does not exist, so
+          # an empty result is a renamed branch or a moved repo, not a stale pin.
+          if [ -z "$upstream" ]; then
+            echo "ERROR: rdrview has no refs/heads/master. The branch was renamed, or the repo moved." >&2
+            exit 1
+          fi
+          echo "pinned:   $RDRVIEW_SHA"
+          echo "upstream: $upstream"
+          # Report a tag on the upstream commit. It tells the maintainer whether a
+          # refresh moves the pin to a release or to an untagged commit. Reported
+          # only — the comparison above is against master, because master is what
+          # a user builds.
+          # An annotated tag needs the peeled `^{}` row to match a commit SHA, so
+          # both the prefix and the suffix come off the printed name.
+          git ls-remote --tags https://github.com/eafer/rdrview.git \
+            | awk -v sha="$upstream" '$1 == sha {
+                sub(/^refs\/tags\//, "", $2)
+                sub(/\^\{\}$/, "", $2)
+                print "upstream tag: " $2
+              }'
+          if [ "$upstream" != "$RDRVIEW_SHA" ]; then
+            echo "ERROR: the rdrview pin is behind upstream master." >&2
+            echo "       Set RDRVIEW_SHA in this workflow to $upstream, in its own PR. See #237." >&2
+            exit 1
+          fi
+          echo "ok: the pin matches upstream master"

@@ -237,6 +237,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // so the model knows where the content originated and can re-fetch the
   // redirect target directly on follow-ups. Same channel as the trailing
   // [TRUNCATED — …] footer; in-band marker, not a structured field.
+  // See [ADR 0002](../../docs/adr/0002-in-band-markers.md).
   //
   // Compares `URL.host` (host + port if non-default), not `hostname` —
   // example.com:8443 → example.com is a port change worth flagging.

@@ -37,3 +37,5 @@ plan. A topic doc at `docs/<topic>.md` tells a user how a feature behaves.
   markers inside the returned text, not with structured fields.
 - [`0003-undici-own-fetch.md`](0003-undici-own-fetch.md) — call the installed
   undici's `fetch`, not Node's global one, so the SSRF dispatcher is honored.
+- [`0004-two-layer-ssrf-guard.md`](0004-two-layer-ssrf-guard.md) — guard SSRF in
+  two layers: a string-level parse before the request and a connect-time DNS pin.

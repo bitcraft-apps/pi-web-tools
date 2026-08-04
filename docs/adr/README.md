@@ -41,3 +41,5 @@ plan. A topic doc at `docs/<topic>.md` tells a user how a feature behaves.
   two layers: a string-level parse before the request and a connect-time DNS pin.
 - [`0005-subprocess-html-to-markdown.md`](0005-subprocess-html-to-markdown.md) —
   convert HTML with a `pandoc` or `w3m` subprocess, not an in-process npm library.
+- [`0006-extractor-gating-thresholds.md`](0006-extractor-gating-thresholds.md) — gate the
+  extraction pre-pass on a 10 KB body floor and a 1% output-to-input ratio.

@@ -35,3 +35,5 @@ plan. A topic doc at `docs/<topic>.md` tells a user how a feature behaves.
   accept a bounded single-entry memo for `webfetch` pagination.
 - [`0002-in-band-markers.md`](0002-in-band-markers.md) — signal the model with
   markers inside the returned text, not with structured fields.
+- [`0003-undici-own-fetch.md`](0003-undici-own-fetch.md) — call the installed
+  undici's `fetch`, not Node's global one, so the SSRF dispatcher is honored.

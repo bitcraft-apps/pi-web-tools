@@ -15,33 +15,46 @@ import { ensureText, type FormatterTheme } from "./lib/render.js";
 //   2. `required` must list *every* key in `properties` (#241) — so an
 //      optional field is `Type.Union([X, Type.Null()])`, never
 //      `Type.Optional`. `execute` maps null back to "not supplied".
-//   3. only core keywords survive: no `default`, `minimum`, `maximum`,
-//      `pattern`. Bounds live in the description (for the model) and in
-//      `fetchAsMarkdown`'s guards (for enforcement) instead.
+//   3. `allOf`, `oneOf` and `not` are refused outright. Value constraints —
+//      `minimum`, `maximum`, `pattern` and friends — are *not*: #242 read them
+//      as refused and stripped them, #247 measured the provider and found it
+//      takes all of them, #248 put them back. Every keyword below is a
+//      recorded acceptance in test/strict-contract.json; nothing here is a
+//      reading of the docs, which has been wrong twice.
 //
-// test/schema.test.ts asserts all three for every registered tool.
+// test/schema.test.ts asserts all three for every registered tool, against
+// that fixture rather than against our own ruleset.
 const webfetchSchema = Type.Object(
   {
     url: Type.String({ description: "Absolute http(s) URL to fetch." }),
-    max_chars: Type.Union([Type.Number(), Type.Null()], {
-      description: `Truncate output at N chars (default ${MAX_CHARS_DEFAULT}, minimum 2, hard cap ${MAX_CHARS_HARD_CAP}). Pass null to use the default.`,
+    // `minimum: 2` (not 1) is what makes lib/paginate.ts's end-side
+    // surrogate-snap asymmetry an invariant rather than a "production callers
+    // don't reach maxChars=1" assumption: at maxChars=1 the snap would empty
+    // the slice, so `paginate` deliberately ships a lone high surrogate
+    // instead — the only path that can desync the half-open [offset, end)
+    // tiling. `fetchAsMarkdown`'s clamp enforces the same floor for callers
+    // that reach it without schema validation.
+    //
+    // No `maximum`: MAX_CHARS_HARD_CAP is a clamp, not a rejection, so a
+    // larger value is legal and simply capped. That belongs in the
+    // description, not in a keyword that would refuse the call.
+    max_chars: Type.Union([Type.Number({ minimum: 2 }), Type.Null()], {
+      description: `Truncate output at N chars (default ${MAX_CHARS_DEFAULT}, hard cap ${MAX_CHARS_HARD_CAP}). Pass null to use the default.`,
     }),
-    // The floor of 2 is what makes lib/paginate.ts's end-side surrogate-snap
-    // asymmetry an invariant rather than a "production callers don't reach
-    // maxChars=1" assumption: at maxChars=1 the snap would empty the slice,
-    // so `paginate` deliberately ships a lone high surrogate instead — the
-    // only path that can desync the half-open [offset, end) tiling. It is
-    // enforced solely by `fetchAsMarkdown`'s clamp now that strict mode
-    // rules out `minimum`.
-    offset: Type.Union([Type.Integer(), Type.Null()], {
-      // Type.Integer (not Type.Number) because `type: "integer"` is core and
-      // survives strict mode; the [0, MAX_RESPONSE_BYTES - 1] range does not,
-      // so it is stated in the description and enforced only by
-      // fetchAsMarkdown's runtime throw. MAX_RESPONSE_BYTES - 1 because the
-      // runtime past-end short-circuit makes offset === MAX_RESPONSE_BYTES a
-      // guaranteed no-op (total <= MAX_RESPONSE_BYTES).
-      description: `Character offset into the extracted markdown — an integer in [0, ${MAX_RESPONSE_BYTES - 1}]; pass null or 0 to start at the beginning. When the previous fetch returned a \`[TRUNCATED ... Re-call with offset=N ...]\` footer, pass that N here to read the next chunk. There is no cache between calls — each paginated read re-fetches and re-extracts.`,
-    }),
+    offset: Type.Union(
+      [
+        // Type.Integer (not Type.Number) so 1.5 is refused by `type` rather
+        // than by fetchAsMarkdown's throw. MAX_RESPONSE_BYTES - 1 because the
+        // runtime past-end short-circuit makes offset === MAX_RESPONSE_BYTES a
+        // guaranteed no-op (total <= MAX_RESPONSE_BYTES), so the last
+        // addressable character is one below it.
+        Type.Integer({ minimum: 0, maximum: MAX_RESPONSE_BYTES - 1 }),
+        Type.Null(),
+      ],
+      {
+        description: `Character offset into the extracted markdown; pass null or 0 to start at the beginning. When the previous fetch returned a \`[TRUNCATED ... Re-call with offset=N ...]\` footer, pass that N here to read the next chunk. There is no cache between calls — each paginated read re-fetches and re-extracts.`,
+      },
+    ),
   },
   { additionalProperties: false },
 );

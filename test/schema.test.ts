@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { registeredTools } from "./_helpers/registered-tools.js";
-import { STRICT_ALLOWED, violationsOf } from "./_helpers/strict-schema.js";
+import { isSchemaNode, STRICT_ALLOWED, violationsOf } from "./_helpers/strict-schema.js";
+import { MAX_RESPONSE_BYTES } from "../src/lib/headers.js";
+import { REGION_PATTERN } from "../src/lib/ddgr.js";
 import contract from "./strict-contract.json" with { type: "json" };
 
 /**
@@ -21,9 +23,9 @@ import contract from "./strict-contract.json" with { type: "json" };
  *
  * The three tests below close both directions:
  *
- *   - a keyword the provider accepts cannot stay out of `STRICT_ALLOWED`,
- *     which is what makes putting `minimum`/`pattern` back into the tool
- *     schemas justifiable rather than a fourth guess, and
+ *   - a keyword the provider accepts cannot stay out of `STRICT_ALLOWED`.
+ *     That is what made putting `minimum`, `maximum` and `pattern` back into
+ *     the tool schemas (#248) evidence rather than a fourth guess, and
  *   - a schema the provider rejects cannot pass our walk, which is how a rule
  *     nobody has met yet fails here instead of in someone's session.
  */
@@ -56,10 +58,9 @@ describe("recorded provider contract", () => {
   it("agrees with STRICT_ALLOWED in both directions", () => {
     // Both directions, reported separately, because they mean opposite
     // things. `withheld` is a keyword the provider takes that we refuse —
-    // the reason `minimum`/`pattern` are missing from the tool schemas, and
-    // the evidence that would justify putting them back. `unproven` is a
-    // keyword we allow with no recorded verdict behind it, which is how #239
-    // and #241 shipped.
+    // how `minimum`, `maximum` and `pattern` came to be missing from the tool
+    // schemas between #242 and #248. `unproven` is a keyword we allow with no
+    // recorded verdict behind it, which is how #239 and #241 shipped.
     const withheld = [...ACCEPTED_KEYWORDS].filter((k) => !STRICT_ALLOWED.has(k));
     const unproven = [...STRICT_ALLOWED].filter((k) => !ACCEPTED_KEYWORDS.has(k));
     expect({ withheld, unproven }).toEqual({ withheld: [], unproven: [] });
@@ -96,4 +97,43 @@ describe("tool parameter schemas", () => {
       expect(violationsOf(parameters)).toEqual([]);
     },
   );
+
+  it("states its bounds in the schema, not only in the prose (#248)", () => {
+    // The other direction of the same argument. Every test above says what a
+    // schema may *not* contain, so deleting a bound passes all of them —
+    // which is exactly how #242 removed these without anything going red.
+    // Pinning the keywords means the next strip has to be deliberate.
+    //
+    // Values, not just presence: `minimum: 2` on `max_chars` is what makes
+    // paginate's surrogate-snap asymmetry an invariant, and
+    // MAX_RESPONSE_BYTES - 1 is the last addressable offset. An off-by-one
+    // here is a real behaviour change, not a cosmetic one.
+    const byName = new Map(registeredTools().map((t) => [t.name, t.parameters]));
+    // anyOf[0] is the non-null branch: optionality is required + nullable
+    // (#241), so every bounded field is a two-branch union carrying its
+    // constraint on the typed branch. Walked with the same `isSchemaNode`
+    // guard the ruleset uses, so a shape change fails with the path that
+    // broke rather than a `cannot read property of undefined`.
+    const constrainedBranch = (tool: string, property: string): Record<string, unknown> => {
+      const schema = byName.get(tool);
+      const properties = isSchemaNode(schema) ? schema.properties : undefined;
+      const field = isSchemaNode(properties) ? properties[property] : undefined;
+      const branches = isSchemaNode(field) ? field.anyOf : undefined;
+      const branch = Array.isArray(branches) ? branches[0] : undefined;
+      if (!isSchemaNode(branch)) {
+        throw new Error(`${tool}.${property} is not a nullable union with a typed first branch`);
+      }
+      return branch;
+    };
+
+    expect(constrainedBranch("webfetch", "max_chars").minimum).toBe(2);
+    expect(constrainedBranch("webfetch", "offset")).toMatchObject({
+      type: "integer",
+      minimum: 0,
+      maximum: MAX_RESPONSE_BYTES - 1,
+    });
+    // Same regex `buildDdgrArgs` re-checks, by construction rather than by a
+    // second copy — see the note on REGION_PATTERN.
+    expect(constrainedBranch("websearch", "region").pattern).toBe(REGION_PATTERN.source);
+  });
 });

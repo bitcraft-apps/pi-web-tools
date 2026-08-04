@@ -316,8 +316,9 @@ describe("fetchAsMarkdown", () => {
     // paginate's marker. Companion to the `MAX_RESPONSE_BYTES + 1` test
     // above and the `MAX_RESPONSE_BYTES - 1` boundary below; together
     // they pin the documented range [0, MAX_RESPONSE_BYTES - 1] at the
-    // seam. Runtime is the only enforcement — the schema's `maximum` was
-    // dropped for OpenAI/Codex strict mode (#241).
+    // seam — the same range webfetch's schema states as
+    // `maximum: MAX_RESPONSE_BYTES - 1` (#248), enforced here for callers the
+    // schema never validates.
     await expect(
       fetchAsMarkdown({ url: "https://example.com", offset: MAX_RESPONSE_BYTES }),
     ).rejects.toThrow(/exceeds the maximum addressable range/i);

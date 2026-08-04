@@ -11,8 +11,9 @@
  *   - a rule we do not know about yet shows up as a probe the provider
  *     rejects but our walk accepts, and
  *   - a keyword we withhold without cause shows up as a probe the provider
- *     accepts, which is the only evidence that justifies putting `minimum`,
- *     `maximum` or `pattern` back into the tool schemas.
+ *     accepts. That is what the first run found: `minimum`, `maximum` and
+ *     `pattern` were accepted all along, and #248 put them back on this
+ *     evidence rather than on a fourth reading of the docs.
  *
  * Hand-run, not part of `bun run test`: it needs a key and a network. Run it
  * again after you change a tool schema, or to refresh stale verdicts.
@@ -221,6 +222,61 @@ const RULE_PROBES: ProbeCase[] = [
   },
 ];
 
+/**
+ * Probes for the *shape* the tool schemas emit, as opposed to the keywords
+ * they use. A `keyword:minimum` acceptance proves the provider takes `minimum`
+ * on a plain numeric property; it says nothing about the same keyword one
+ * level down, inside an `anyOf` branch — which is where every bound in these
+ * tools lives, because optionality is expressed as required + nullable (#241).
+ *
+ * Without these, a rejection of that placement would surface only as
+ * `tool:webfetch` failing, with nothing naming the part of the schema that
+ * caused it. `keywords: []` on purpose: the keyword cases already claim these
+ * names, and a shape case proves a placement, not a keyword.
+ *
+ * Named `shape:`, not `rule:`, because `test/schema.test.ts` reads every
+ * `rule:*` case as a probe that must have been *rejected* — they are the
+ * control that proves the endpoint validated anything at all.
+ */
+const SHAPE_PROBES: ProbeCase[] = [
+  {
+    name: "shape:nullable-union-minimum",
+    keywords: [],
+    expect: "accept",
+    // webfetch's `max_chars`.
+    schema: object({
+      value: {
+        anyOf: [{ type: "number", minimum: 2 }, { type: "null" }],
+        description: "A probe property.",
+      },
+    }),
+  },
+  {
+    name: "shape:nullable-union-range",
+    keywords: [],
+    expect: "accept",
+    // webfetch's `offset`: two bounds on an integer branch.
+    schema: object({
+      value: {
+        anyOf: [{ type: "integer", minimum: 0, maximum: 10 }, { type: "null" }],
+        description: "A probe property.",
+      },
+    }),
+  },
+  {
+    name: "shape:nullable-union-pattern",
+    keywords: [],
+    expect: "accept",
+    // websearch's `region`.
+    schema: object({
+      value: {
+        anyOf: [{ type: "string", pattern: "^[a-z]{2}-[a-z]{2}$" }, { type: "null" }],
+        description: "A probe property.",
+      },
+    }),
+  },
+];
+
 function buildCases(): ProbeCase[] {
   const baseline: ProbeCase = {
     name: "baseline",
@@ -254,7 +310,7 @@ function buildCases(): ProbeCase[] {
     schema: tool.parameters,
   }));
 
-  return [baseline, ...keywordCases, ...RULE_PROBES, ...toolCases];
+  return [baseline, ...keywordCases, ...RULE_PROBES, ...SHAPE_PROBES, ...toolCases];
 }
 
 interface Verdict {

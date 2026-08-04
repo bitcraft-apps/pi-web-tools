@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { stubExtensionContext } from "./_helpers/context.js";
 
-vi.mock("../src/lib/ddgr.js", () => ({
+// Only `runDdgr` is stubbed. The rest of the module has to stay real:
+// websearch's schema reads `REGION_PATTERN.source` for the `region` pattern
+// (#248), so a wholesale replacement makes importing the tool throw.
+vi.mock(import("../src/lib/ddgr.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   runDdgr: vi.fn(),
 }));
 

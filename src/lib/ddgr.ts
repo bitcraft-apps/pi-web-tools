@@ -35,9 +35,12 @@ export type TimeFilter = "d" | "w" | "m" | "y";
 
 export interface RunDdgrOptions {
   /**
-   * Maps to ddgr's `--reg`. Format is enforced here (see REGION_PATTERN), not
-   * at the schema boundary: OpenAI/Codex strict mode disallows `pattern`, so
-   * websearch.ts's schema had to drop it (#241) and this is the only check.
+   * Maps to ddgr's `--reg`. Checked twice on purpose: websearch.ts's schema
+   * carries the same shape as a `pattern` (#248), and REGION_PATTERN below
+   * re-checks it here. The schema is not enough on its own — sampling is
+   * constrained on a best-effort basis (`strict: "prefer"`), and this function
+   * is exported, so a direct caller never passes through schema validation at
+   * all.
    */
   region?: string;
   safesearch?: SafeSearch;
@@ -54,8 +57,13 @@ export interface RunDdgrOptions {
  * Region codes we pass through to ddgr. Anything else is dropped rather than
  * rejected, matching the documented behavior ("unknown codes fall back to
  * ddgr's default") and keeping non-region-shaped strings out of argv.
+ *
+ * Exported so websearch.ts's schema can emit `pattern: REGION_PATTERN.source`
+ * instead of a second hand-written copy of the same regex. Keep it flag-free:
+ * `.source` drops flags, so a `/i` here would loosen the runtime check while
+ * the schema stayed strict.
  */
-const REGION_PATTERN = /^[a-z]{2}-[a-z]{2}$/;
+export const REGION_PATTERN = /^[a-z]{2}-[a-z]{2}$/;
 
 export function buildDdgrArgs(query: string, limit: number, opts: RunDdgrOptions = {}): string[] {
   const args = ["--json", "--num", String(limit), "--noprompt"];

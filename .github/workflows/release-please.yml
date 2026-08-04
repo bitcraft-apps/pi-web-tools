@@ -109,11 +109,7 @@ jobs:
       # lets npm exchange the GitHub OIDC token for a short-lived publish credential,
       # gated server-side on the trusted publisher registered for this package
       # (org: bitcraft-apps, repo: pi-web-tools, workflow: release-please.yml).
-      # No NPM_TOKEN secret needed.
-      #
-      # TODO(#21): after the first successful OIDC publish, delete the NPM_TOKEN org
-      # secret so it doesn't linger as a forgotten long-lived credential. Tracked in
-      # the follow-up task list on issue #21.
+      # Publishing is OIDC-only — no long-lived registry token is involved.
       - name: publish to npm (skip if version already exists)
         run: |
           name=$(node -p "require('./package.json').name")

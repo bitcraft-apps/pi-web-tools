@@ -1,5 +1,5 @@
-import { commandExists, probeOnce } from "./which.ts";
-import { runCommand } from "./run-command.ts";
+import { commandExists, probeOnce } from "./which.js";
+import { runCommand } from "./run-command.js";
 
 // Same backstop as html2md's CONVERT_TIMEOUT_MS. Note: webfetch now chains
 // extractor → pandoc/w3m, so worst-case subprocess time per HTML fetch is ~20s.

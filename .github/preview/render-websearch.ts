@@ -8,9 +8,9 @@
 // query, limit, and theme live in exactly one place.
 
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
-import { runDdgr } from "../../src/lib/ddgr.ts";
-import { formatWebsearchResult } from "../../src/websearch.ts";
-import { makeTheme } from "./ansi-theme.ts";
+import { runDdgr } from "../../src/lib/ddgr.js";
+import { formatWebsearchResult } from "../../src/websearch.js";
+import { makeTheme } from "./ansi-theme.js";
 
 export const QUERY = "pi coding agent";
 export const LIMIT = 5;

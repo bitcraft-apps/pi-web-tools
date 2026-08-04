@@ -6,9 +6,9 @@
 // in exactly one place.
 
 import type { ThemeColor } from "@earendil-works/pi-coding-agent";
-import { fetchAsMarkdown } from "../../src/lib/pipeline.ts";
-import { formatWebfetchResult } from "../../src/webfetch.ts";
-import { makeTheme } from "./ansi-theme.ts";
+import { fetchAsMarkdown } from "../../src/lib/pipeline.js";
+import { formatWebfetchResult } from "../../src/webfetch.js";
+import { makeTheme } from "./ansi-theme.js";
 
 // Stable, on-brand, visually varied (heading + prose + numbered list +
 // links). See spec §"Decisions" #1 for why this URL.

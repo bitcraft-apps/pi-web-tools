@@ -1,4 +1,4 @@
-import { runCommandRaw } from "./run-command.ts";
+import { runCommandRaw } from "./run-command.js";
 
 const NOT_INSTALLED =
   "ddgr not installed. Run: brew install ddgr (mac) / pip install ddgr / apt install ddgr";

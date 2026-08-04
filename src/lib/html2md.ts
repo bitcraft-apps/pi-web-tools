@@ -1,5 +1,5 @@
-import { commandExists, probeOnce } from "./which.ts";
-import { runCommand } from "./run-command.ts";
+import { commandExists, probeOnce } from "./which.js";
+import { runCommand } from "./run-command.js";
 
 const CONVERT_TIMEOUT_MS = 10_000;
 

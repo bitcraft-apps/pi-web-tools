@@ -1,5 +1,5 @@
-import { commandExists, probeOnce } from "./which.ts";
-import { runCommand } from "./run-command.ts";
+import { commandExists, probeOnce } from "./which.js";
+import { runCommand } from "./run-command.js";
 
 // pdftotext on a moderately-sized PDF (academic paper, RFC) finishes in tens
 // of ms; on a 5 MB scanned/OCR-heavy PDF it can legitimately spike to several

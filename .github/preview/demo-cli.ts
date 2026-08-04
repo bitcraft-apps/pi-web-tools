@@ -15,10 +15,11 @@
 // URL, and colors.
 //
 // Run with: npx -y tsx .github/preview/demo-cli.ts <websearch|webfetch> [arg]
-// (plain `node` won't strip the .ts imports below.)
+// (plain `node` won't strip the types, and won't map the `.js` specifiers
+// below onto the `.ts` files on disk.)
 
-import { renderWebsearch } from "./render-websearch.ts";
-import { renderWebfetch } from "./render-webfetch.ts";
+import { renderWebsearch } from "./render-websearch.js";
+import { renderWebfetch } from "./render-webfetch.js";
 
 const USAGE = [
   "usage: demo-cli.ts websearch [query] [--limit N]",

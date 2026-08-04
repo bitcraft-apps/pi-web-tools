@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.6.0](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.5.1...v1.6.0) (2026-08-04)
+
+
+### Features
+
+* **webfetch:** memoize document for continuations ([#261](https://github.com/bitcraft-apps/pi-web-tools/issues/261)) ([78283a9](https://github.com/bitcraft-apps/pi-web-tools/commit/78283a98a5586fb95e5edda6ce2051aee570ec6e))
+
+
+### Bug Fixes
+
+* restore schema bounds [#242](https://github.com/bitcraft-apps/pi-web-tools/issues/242) stripped without cause ([#249](https://github.com/bitcraft-apps/pi-web-tools/issues/249)) ([a07b738](https://github.com/bitcraft-apps/pi-web-tools/commit/a07b73819aa1ae4c018300727c19ba49f2b32836))
+
 ## [1.5.1](https://github.com/bitcraft-apps/pi-web-tools/compare/v1.5.0...v1.5.1) (2026-08-03)
 
 

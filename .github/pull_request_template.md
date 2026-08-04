@@ -12,3 +12,4 @@ Closes #<issue>
 - [ ] `bun run test` passes
 - [ ] `bun run typecheck` passes
 - [ ] Manual verification: <what you ran, if applicable>
+- [ ] Tool schema changed? Ran `bun run probe:strict`, committed `test/strict-contract.json`, and smoke-checked one `websearch` and one paginated `webfetch` on an `openai-codex` session (see AGENTS.md → Release checks)

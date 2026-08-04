@@ -17,6 +17,7 @@
     "index.ts",
     "src/**/*",
     "test/**/*",
+    "scripts/**/*.ts",
     "vitest.config.ts",
     ".github/preview/**/*"
   ]

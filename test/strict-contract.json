@@ -1,0 +1,673 @@
+{
+  "endpoint": "https://api.openai.com/v1/responses",
+  "api": "responses",
+  "model": "gpt-5",
+  "extraBody": {},
+  "recordedAt": "2026-08-04",
+  "cases": [
+    {
+      "name": "baseline",
+      "keywords": ["type", "description", "properties", "required", "additionalProperties"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "A probe property."
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:anyOf",
+      "keywords": ["anyOf"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:enum",
+      "keywords": ["enum"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "enum": ["a", "b"]
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:const",
+      "keywords": ["const"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "const": "a"
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:items",
+      "keywords": ["items"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:$defs",
+      "keywords": ["$defs", "$ref"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/probe"
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false,
+        "$defs": {
+          "probe": {
+            "type": "string",
+            "description": "A probe definition."
+          }
+        }
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:minimum",
+      "keywords": ["minimum"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "number",
+            "description": "d",
+            "minimum": 0
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:maximum",
+      "keywords": ["maximum"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "number",
+            "description": "d",
+            "maximum": 10
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:exclusiveMinimum",
+      "keywords": ["exclusiveMinimum"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "number",
+            "description": "d",
+            "exclusiveMinimum": 0
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:exclusiveMaximum",
+      "keywords": ["exclusiveMaximum"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "number",
+            "description": "d",
+            "exclusiveMaximum": 10
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:multipleOf",
+      "keywords": ["multipleOf"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "number",
+            "description": "d",
+            "multipleOf": 2
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:pattern",
+      "keywords": ["pattern"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "d",
+            "pattern": "^[a-z]{2}$"
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:format",
+      "keywords": ["format"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "d",
+            "format": "date-time"
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:minLength",
+      "keywords": ["minLength"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "d",
+            "minLength": 1
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:maxLength",
+      "keywords": ["maxLength"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "d",
+            "maxLength": 8
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:minItems",
+      "keywords": ["minItems"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "array",
+            "description": "d",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:maxItems",
+      "keywords": ["maxItems"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "array",
+            "description": "d",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:default",
+      "keywords": ["default"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "d",
+            "default": "a"
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:title",
+      "keywords": ["title"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "d",
+            "title": "Probe"
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:examples",
+      "keywords": ["examples"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "d",
+            "examples": ["a"]
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "keyword:allOf",
+      "keywords": ["allOf"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "allOf": [
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": false,
+      "status": 400,
+      "error": "Invalid schema for function 'probe': In context=('properties', 'value'), 'allOf' is not permitted."
+    },
+    {
+      "name": "keyword:oneOf",
+      "keywords": ["oneOf"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": false,
+      "status": 400,
+      "error": "Invalid schema for function 'probe': In context=('properties', 'value'), 'oneOf' is not permitted."
+    },
+    {
+      "name": "keyword:not",
+      "keywords": ["not"],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "d",
+            "not": {
+              "const": "a"
+            }
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": false,
+      "status": 400,
+      "error": "Invalid schema for function 'probe': In context=('properties', 'value', 'not'), schema must have a 'type' key."
+    },
+    {
+      "name": "rule:additional-properties-absent",
+      "keywords": [],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "A probe property."
+          }
+        },
+        "required": ["value"]
+      },
+      "accepted": false,
+      "status": 400,
+      "error": "Invalid schema for function 'probe': In context=(), 'additionalProperties' is required to be supplied and to be false."
+    },
+    {
+      "name": "rule:additional-properties-true",
+      "keywords": [],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "A probe property."
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": true
+      },
+      "accepted": false,
+      "status": 400,
+      "error": "Invalid schema for function 'probe': In context=(), 'additionalProperties' is required to be supplied and to be false."
+    },
+    {
+      "name": "rule:required-omits-key",
+      "keywords": [],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "description": "A probe property."
+          },
+          "optional": {
+            "type": "string",
+            "description": "A probe property."
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": false,
+      "status": 400,
+      "error": "Invalid schema for function 'probe': In context=(), 'required' is required to be supplied and to be an array including every key in properties. Missing 'optional'."
+    },
+    {
+      "name": "rule:nested-object-additional-properties-absent",
+      "keywords": [],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "nested": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "description": "A probe property."
+              }
+            },
+            "required": ["value"]
+          }
+        },
+        "required": ["nested"],
+        "additionalProperties": false
+      },
+      "accepted": false,
+      "status": 400,
+      "error": "Invalid schema for function 'probe': In context=('properties', 'nested'), 'additionalProperties' is required to be supplied and to be false."
+    },
+    {
+      "name": "tool:websearch",
+      "keywords": [],
+      "schema": {
+        "type": "object",
+        "required": ["query", "limit", "region", "safesearch", "time"],
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query (free-form text)."
+          },
+          "limit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Max number of results (default 8, hard cap 25). Pass null to use the default."
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "DuckDuckGo region code matching ^[a-z]{2}-[a-z]{2}$, e.g. 'pl-pl', 'us-en', 'de-de'. Pass null for ddgr's built-in default (us-en). Malformed or unknown codes are ignored and fall back to that default."
+          },
+          "safesearch": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "off"
+              },
+              {
+                "type": "string",
+                "const": "moderate"
+              },
+              {
+                "type": "string",
+                "const": "strict"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Safe search level. 'off' disables it (passes --unsafe to ddgr). 'moderate' (default, also used when null) and 'strict' both use ddgr's default safe-search behavior; ddgr does not distinguish them."
+          },
+          "time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "d"
+              },
+              {
+                "type": "string",
+                "const": "w"
+              },
+              {
+                "type": "string",
+                "const": "m"
+              },
+              {
+                "type": "string",
+                "const": "y"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Time filter: 'd' (past day), 'w' (past week), 'm' (past month), 'y' (past year). Pass null for no filter (all time). Use when the query is time-sensitive ('latest', 'recent', 'this week') — DuckDuckGo's default ranking otherwise surfaces years-old SEO content above recent results."
+          }
+        },
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "tool:webfetch",
+      "keywords": [],
+      "schema": {
+        "type": "object",
+        "required": ["url", "max_chars", "offset"],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Absolute http(s) URL to fetch."
+          },
+          "max_chars": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Truncate output at N chars (default 50000, minimum 2, hard cap 200000). Pass null to use the default."
+          },
+          "offset": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Character offset into the extracted markdown — an integer in [0, 5242879]; pass null or 0 to start at the beginning. When the previous fetch returned a `[TRUNCATED ... Re-call with offset=N ...]` footer, pass that N here to read the next chunk. There is no cache between calls — each paginated read re-fetches and re-extracts."
+          }
+        },
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    }
+  ]
+}

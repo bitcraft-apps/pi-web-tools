@@ -98,6 +98,43 @@ that the loader overhead is obviously worth paying.
 
 Rationale: the workflow/job ID is what appears in PR required-status-check config and failure notifications, so it must match the filename and be greppable.
 
+## Release checks
+
+Releases are automatic: release-please opens a release PR, and the merge
+publishes to npm. No CI job speaks to an OpenAI/Codex provider. Those providers
+validate every tool schema before the turn starts, so a bad schema stops the
+whole session for every user. #239, #240 and #241 each reached users this way.
+
+Do these two checks by hand.
+
+**Before you merge a release PR**, load the extension on an `openai-codex`
+session and run one call of each tool:
+
+1. Link the working copy: `ln -s "$(pwd)" ~/.pi/agent/extensions/pi-web-tools`.
+2. Start pi with an `openai-codex` provider. Run `/reload`.
+3. Run one `websearch` call.
+4. Run one `webfetch` call with `offset` set, to prove the pagination
+   round-trip.
+
+This proves the tools work end to end on the provider. Record the result in the
+release PR.
+
+**It is not a schema gate.** Measured on 2026-08-04 with pi and `gpt-5.5`: a
+session accepted, and called, tools whose schemas broke #239 (no
+`additionalProperties`), #241 (`required` omits a key) and one that used
+`allOf`, which the OpenAI API rejects by name. So pi's `openai-codex` path does
+not apply strict validation, and a green smoke check says nothing about whether
+a schema is strict-legal. Why this differs from the sessions that broke in #239
+and #241 is not known — pi may sanitize schemas now, or the provider may have
+changed. Until that is understood, treat `test/schema.test.ts` and its recorded
+fixture as the only schema gate.
+
+**When you change a tool schema**, also run `bun run probe:strict` with a real
+key and commit the new `test/strict-contract.json`. The probe asks the provider
+which keywords and rules it accepts. `test/schema.test.ts` holds the ruleset to
+those recorded answers, so an unverified change to `STRICT_ALLOWED` fails the
+test suite.
+
 ## Writing style
 
 English prose — docs, code comments, commit and PR text, issues, user-visible strings —

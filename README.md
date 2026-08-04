@@ -97,6 +97,11 @@ bun run test                # unit tests, no network
 bun run test:contract       # run the real external CLIs (pandoc, w3m, trafilatura, rdrview, pdftotext, ddgr);
                             #   skips any binary you do not have installed. PI_CONTRACT_STRICT=1 makes a
                             #   missing binary a failure, PI_CONTRACT_NETWORK=1 adds one live DuckDuckGo query
+bun run probe:strict        # ask a real OpenAI/Codex provider which schema keywords it accepts and rewrite
+                            #   test/strict-contract.json. Hand-run, not part of `bun run test`: needs
+                            #   OPENAI_API_KEY and network. Run it when you change a tool schema.
+                            #   STRICT_PROBE_ENDPOINT/_MODEL point it at a gateway (OpenRouter and
+                            #   friends); it refuses to vouch for an endpoint that skips validation
 bash scripts/metrics.sh     # passive health signals (npm + GitHub) and upstream pi drift; on-demand, no state
 ```
 

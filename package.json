@@ -50,10 +50,11 @@
     "test": "vitest --run",
     "test:watch": "vitest",
     "test:contract": "vitest --run test/contract",
+    "probe:strict": "bun scripts/strict-probe.ts",
     "typecheck": "tsgo --noEmit -p tsconfig.json",
     "lint": "oxlint --deny-warnings",
-    "format": "oxfmt src/ test/ index.ts vitest.config.ts",
-    "format:check": "oxfmt --check src/ test/ index.ts vitest.config.ts"
+    "format": "oxfmt src/ test/ scripts/ index.ts vitest.config.ts",
+    "format:check": "oxfmt --check src/ test/ scripts/ index.ts vitest.config.ts"
   },
   "engines": {
     "node": ">=22"

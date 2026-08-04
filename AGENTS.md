@@ -98,6 +98,23 @@ that the loader overhead is obviously worth paying.
 
 Rationale: the workflow/job ID is what appears in PR required-status-check config and failure notifications, so it must match the filename and be greppable.
 
+## Peer dependency floors
+
+The three peer ranges in `package.json` have a `>=` floor. Each floor is the version
+that CI resolved when the floor was set (issue #213): `pi-coding-agent` 0.83.0,
+`pi-tui` 0.83.0, `typebox` 1.3.7.
+
+- Keep the top of each range open. A minor release upstream then needs no release here.
+- Raise a floor only when this package starts to use an API that the older version
+  does not have. Do not raise a floor to track the latest upstream version.
+- A floor is not a drift signal. Pi re-scoped its npm packages once already
+  (`@mariozechner/*` → `@earendil-works/*`, issue #162), and the range kept resolving
+  the whole time. Section 6 of `scripts/metrics.sh` is the drift signal.
+
+`devDependencies` are separate: the `@earendil-works/*` entries stay at `*` so the dev
+tree tracks the latest upstream version, and `typebox` stays pinned to the exact
+version pi bundles.
+
 ## Release checks
 
 Releases are automatic: release-please opens a release PR, and the merge

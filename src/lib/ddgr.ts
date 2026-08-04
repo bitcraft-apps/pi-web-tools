@@ -9,6 +9,23 @@ export interface DdgrResult {
   snippet: string;
 }
 
+/**
+ * The ddgr JSON fields we read. Everything else in ddgr's output is ignored.
+ * Fields are `unknown` because nothing validates the parsed JSON — `str()`
+ * below is the runtime guard. The `abstract` → `snippet` mapping is pinned by
+ * test/contract/ddgr.test.ts against the real binary.
+ */
+interface DdgrRawResult {
+  title?: unknown;
+  url?: unknown;
+  abstract?: unknown;
+}
+
+/** Missing or non-string ddgr fields degrade to "" rather than throwing. */
+function str(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
 const SNIPPET_MAX = 240;
 const TIMEOUT_MS = 15_000;
 
@@ -23,10 +40,10 @@ export function parseOutput(stdout: string, limit: number): DdgrResult[] {
   if (!Array.isArray(raw)) {
     throw new Error("ddgr output is not a JSON array");
   }
-  return raw.slice(0, limit).map((r: any) => ({
-    title: String(r.title ?? ""),
-    url: String(r.url ?? ""),
-    snippet: String(r.abstract ?? "").slice(0, SNIPPET_MAX),
+  return raw.slice(0, limit).map((r: DdgrRawResult) => ({
+    title: str(r.title),
+    url: str(r.url),
+    snippet: str(r.abstract).slice(0, SNIPPET_MAX),
   }));
 }
 
@@ -83,6 +100,11 @@ export function buildDdgrArgs(query: string, limit: number, opts: RunDdgrOptions
   return args;
 }
 
+/** Spawn failures arrive as raw Node errors; `runCommandRaw` preserves `code`. */
+function isEnoent(e: unknown): boolean {
+  return typeof e === "object" && e !== null && (e as { code?: unknown }).code === "ENOENT";
+}
+
 export async function runDdgr(
   query: string,
   limit: number,
@@ -99,10 +121,10 @@ export async function runDdgr(
       timeoutMessage:
         "DuckDuckGo timed out (likely rate-limited). Try again in a minute or use webfetch with a known URL.",
     });
-  } catch (e: any) {
+  } catch (e) {
     // Covers both spawn failure paths: the synchronous throw and the `error`
     // event. `runCommandRaw` rejects with the raw error, so `code` survives.
-    if (e?.code === "ENOENT") throw new Error(NOT_INSTALLED, { cause: e });
+    if (isEnoent(e)) throw new Error(NOT_INSTALLED, { cause: e });
     throw e;
   }
   const stdout = result.stdout.trim();

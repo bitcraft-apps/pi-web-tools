@@ -113,13 +113,14 @@ export class ShellModeError extends Error {
 
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   const url = validateUrl(input.url);
-  // The floor of 2 is the *only* enforcement: the schema's `minimum: 2` was
-  // removed for OpenAI/Codex strict-mode compatibility (#241), and direct
-  // `fetchAsMarkdown` callers never went through schema validation anyway. It
-  // is what makes paginate's end-side surrogate-snap asymmetry a true
-  // invariant: at maxChars=1 the snap would empty the slice and the
-  // half-open tiling would desync. See `paginate` in lib/paginate.ts and
-  // the `max_chars` schema field for the full rationale.
+  // The floor of 2 is stated twice: `minimum: 2` on webfetch's `max_chars`
+  // (#248) tells the model, and this clamp holds the line for everyone the
+  // schema cannot reach — direct `fetchAsMarkdown` callers, and providers
+  // that only constrain sampling on a best-effort basis. It is what makes
+  // paginate's end-side surrogate-snap asymmetry a true invariant: at
+  // maxChars=1 the snap would empty the slice and the half-open tiling would
+  // desync. See `paginate` in lib/paginate.ts and the `max_chars` schema field
+  // for the full rationale.
   const maxChars = Math.min(Math.max(2, input.max_chars ?? MAX_CHARS_DEFAULT), MAX_CHARS_HARD_CAP);
   // Defensive cap (issue #132): the extracted markdown can never exceed
   // MAX_RESPONSE_BYTES (5 MB). The cap compares JS string units against a
@@ -138,9 +139,10 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   // `>=`, not `>`: offset === MAX_RESPONSE_BYTES is guaranteed-past-end
   // (total <= MAX_RESPONSE_BYTES by the response-size cap), so the
   // request would always return the past-end marker — a no-op offset.
-  // Sole enforcement of the cap: the schema's `maximum: MAX_RESPONSE_BYTES - 1`
-  // was removed for OpenAI/Codex strict-mode compatibility (#241) and now only
-  // appears in the `offset` description.
+  // Backstop for the schema's `maximum: MAX_RESPONSE_BYTES - 1` (#248), which
+  // is the same bound one layer out. This throw is what a caller hits when the
+  // schema was not applied: a direct import, or a provider that treats the
+  // constraint as advisory.
   if (offset >= MAX_RESPONSE_BYTES) {
     throw new Error(
       `offset ${offset} exceeds the maximum addressable range (${MAX_RESPONSE_BYTES} = MAX_RESPONSE_BYTES); documents that large are not supported`,

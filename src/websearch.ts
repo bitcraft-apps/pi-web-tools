@@ -1,7 +1,7 @@
 import { defineTool, keyHint } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { DdgrResult, SafeSearch, TimeFilter } from "./lib/ddgr.js";
-import { runDdgr } from "./lib/ddgr.js";
+import { REGION_PATTERN, runDdgr } from "./lib/ddgr.js";
 import { ensureText, type FormatterTheme } from "./lib/render.js";
 
 /**
@@ -65,21 +65,25 @@ const SAFESEARCH_VALUES = ["off", "moderate", "strict"] as const;
 const SAFESEARCH_DEFAULT: SafeSearch = "moderate";
 const TIME_VALUES = ["d", "w", "m", "y"] as const;
 
-// See webfetch's schema for the three OpenAI/Codex strict-mode rules this
-// shape obeys (#239, #241): `additionalProperties: false`, every property in
+// See webfetch's schema for the OpenAI/Codex strict-mode rules this shape
+// obeys (#239, #241): `additionalProperties: false`, every property in
 // `required` — hence `Type.Union([X, Type.Null()])` instead of
-// `Type.Optional` — and no `default`/`pattern` keywords. Defaults are stated
-// in the descriptions and applied in `execute`; the region format is enforced
-// in lib/ddgr.ts. test/schema.test.ts guards all of it.
+// `Type.Optional` — and no `allOf`/`oneOf`/`not`. Value constraints are
+// allowed (#247, #248), so `region` carries its `pattern` again. Defaults are
+// still stated in the descriptions and applied in `execute`: `default` is a
+// keyword the provider accepts, but whether to spend the prompt tokens on it
+// is a separate question. test/schema.test.ts guards all of it.
 const websearchSchema = Type.Object(
   {
     query: Type.String({ description: "The search query (free-form text)." }),
     limit: Type.Union([Type.Number(), Type.Null()], {
       description: `Max number of results (default ${LIMIT_DEFAULT}, hard cap ${LIMIT_MAX}). Pass null to use the default.`,
     }),
-    region: Type.Union([Type.String(), Type.Null()], {
+    // `REGION_PATTERN.source`, not a copied literal: the same shape is checked
+    // again in buildDdgrArgs, and two hand-written copies of a regex drift.
+    region: Type.Union([Type.String({ pattern: REGION_PATTERN.source }), Type.Null()], {
       description:
-        "DuckDuckGo region code matching ^[a-z]{2}-[a-z]{2}$, e.g. 'pl-pl', 'us-en', 'de-de'. Pass null for ddgr's built-in default (us-en). Malformed or unknown codes are ignored and fall back to that default.",
+        "DuckDuckGo region code, e.g. 'pl-pl', 'us-en', 'de-de'. Pass null for ddgr's built-in default (us-en). Well-formed but unknown codes fall back to that default.",
     }),
     safesearch: Type.Union([...SAFESEARCH_VALUES.map((v) => Type.Literal(v)), Type.Null()], {
       description:

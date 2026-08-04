@@ -30,8 +30,9 @@
  *
  * Every entry is a recorded acceptance, not a reading of the docs. The value
  * constraints below were absent until 2026-08-04, because #242 read them as
- * refused; the probe shows OpenAI takes all of them. What it refuses is
- * `allOf`, `oneOf` and `not`.
+ * refused; the probe shows OpenAI takes all of them, and #248 put `minimum`,
+ * `maximum` and `pattern` back into the tool schemas on that evidence. What
+ * the provider refuses is `allOf`, `oneOf` and `not`.
  */
 export const STRICT_ALLOWED = new Set([
   // Structural.

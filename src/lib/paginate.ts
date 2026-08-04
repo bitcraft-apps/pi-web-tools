@@ -55,10 +55,10 @@ export function paginate(text: string, offset: number, maxChars: number): string
   // the deferred low surrogate) or when the chunk is one char long
   // (snapping would empty the slice — the high half ships now and the
   // low half ships at the next offset). Production callers can't reach
-  // maxChars=1: `fetchAsMarkdown` clamps every caller to a floor of 2
-  // (the schema's `minimum: 2` is gone — OpenAI/Codex strict mode, #241 —
-  // so that clamp is the only enforcement). The branch survives only
-  // for `paginate`'s exported test surface, which still accepts 1.
+  // maxChars=1: webfetch's schema states `minimum: 2` (#248) and
+  // `fetchAsMarkdown` clamps every caller to that same floor. The branch
+  // survives only for `paginate`'s exported test surface, which still
+  // accepts 1.
   //
   // The guard is intentionally one-sided (chunk *end* only). At the
   // chunk *start* the symmetric case — `offset` landing on a lone low

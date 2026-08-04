@@ -546,6 +546,85 @@
       "error": "Invalid schema for function 'probe': In context=('properties', 'nested'), 'additionalProperties' is required to be supplied and to be false."
     },
     {
+      "name": "shape:nullable-union-minimum",
+      "keywords": [],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A probe property."
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "shape:nullable-union-range",
+      "keywords": [],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A probe property."
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
+      "name": "shape:nullable-union-pattern",
+      "keywords": [],
+      "schema": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z]{2}-[a-z]{2}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A probe property."
+          }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+      },
+      "accepted": true,
+      "status": 200,
+      "error": null
+    },
+    {
       "name": "tool:websearch",
       "keywords": [],
       "schema": {
@@ -570,13 +649,14 @@
           "region": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "pattern": "^[a-z]{2}-[a-z]{2}$"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "DuckDuckGo region code matching ^[a-z]{2}-[a-z]{2}$, e.g. 'pl-pl', 'us-en', 'de-de'. Pass null for ddgr's built-in default (us-en). Malformed or unknown codes are ignored and fall back to that default."
+            "description": "DuckDuckGo region code, e.g. 'pl-pl', 'us-en', 'de-de'. Pass null for ddgr's built-in default (us-en). Well-formed but unknown codes fall back to that default."
           },
           "safesearch": {
             "anyOf": [
@@ -643,24 +723,27 @@
           "max_chars": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "number",
+                "minimum": 2
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Truncate output at N chars (default 50000, minimum 2, hard cap 200000). Pass null to use the default."
+            "description": "Truncate output at N chars (default 50000, hard cap 200000). Pass null to use the default."
           },
           "offset": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5242879
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Character offset into the extracted markdown — an integer in [0, 5242879]; pass null or 0 to start at the beginning. When the previous fetch returned a `[TRUNCATED ... Re-call with offset=N ...]` footer, pass that N here to read the next chunk. There is no cache between calls — each paginated read re-fetches and re-extracts."
+            "description": "Character offset into the extracted markdown; pass null or 0 to start at the beginning. When the previous fetch returned a `[TRUNCATED ... Re-call with offset=N ...]` footer, pass that N here to read the next chunk. There is no cache between calls — each paginated read re-fetches and re-extracts."
           }
         },
         "additionalProperties": false

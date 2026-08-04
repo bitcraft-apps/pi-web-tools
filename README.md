@@ -64,7 +64,7 @@ You don't call them directly — pi's agent calls them when it needs.
 - Cross-host redirects are surfaced in-band via a `[REDIRECTED — input was https://INPUT_HOST, final URL is FINAL_URL]` line prepended to the markdown; userinfo (`user:pass@`) is stripped. Same-host redirects produce no notice.
 - Honors the `charset=` parameter on `Content-Type` for response decoding (e.g. `windows-1250`, `iso-8859-2`, `shift_jis`, `gb2312`). Unknown labels fall back to UTF-8.
 - For HTML responses without a `Content-Type` charset, sniffs `<meta charset="...">` or `<meta http-equiv="Content-Type" content="...; charset=...">` declared in the first 1024 bytes (HTML comments are stripped first).
-- All operations are read-only and synchronous. No persistent state, no cache.
+- All operations are read-only and synchronous. The only state is one in-memory entry that holds the last document `webfetch` fetched: a call with `offset` > 0 for that same URL is served from it and makes no request, while `offset` 0 always fetches. The entry is per process, holds one document, and is lost on exit. Nothing is written to disk. See [ADR 0001](docs/adr/0001-webfetch-pagination-memo.md).
 
 ### What `webfetch` does *not* do
 

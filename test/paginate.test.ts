@@ -45,6 +45,9 @@ describe("paginate", () => {
     expect(out).toMatch(/OFFSET 500 PAST END/);
     expect(out).toMatch(/document is 500 chars total/);
     expect(out).toMatch(/shrank between calls/);
+    // The marker names why the read saw the smaller document: it came from
+    // the source, not from the continuation memo (issue #259).
+    expect(out).toMatch(/stored continuation snapshot/);
     // No "retry from offset=0" hint — restart-from-zero hits the same race
     // (doc shrank between calls) and wastes a fetch on an arithmetic error.
     expect(out).not.toMatch(/Re-call with offset=0/);

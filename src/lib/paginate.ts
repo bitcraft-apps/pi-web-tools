@@ -40,7 +40,7 @@ export function paginate(text: string, offset: number, maxChars: number): string
     // race) or (b) its own offset arithmetic is off (restart wastes a
     // fetch). The honest signal is "the prior chunk was already the
     // tail" — the caller decides whether to re-fetch from 0 or stop.
-    return `[OFFSET ${offset} PAST END — document is ${total} chars total. If the document was expected to be longer, it shrank between calls (no cache; each fetch re-runs the pipeline).]`;
+    return `[OFFSET ${offset} PAST END — document is ${total} chars total. If the document was expected to be longer, it shrank between calls (this read came from the source, not from the stored continuation snapshot).]`;
   }
   let end = Math.min(offset + maxChars, total);
   // Snap end down by one if the chunk would end mid-surrogate-pair: a lone

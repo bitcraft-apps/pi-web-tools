@@ -12,7 +12,7 @@
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { MAX_LINES, renderWebfetch } from "./render-webfetch.ts";
+import { MAX_LINES, renderWebfetch } from "./render-webfetch.js";
 
 // Top-level await; any throw exits non-zero with a stack trace via tsx.
 const { text, lines } = await renderWebfetch();

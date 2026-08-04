@@ -10,7 +10,7 @@
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { renderWebsearch } from "./render-websearch.ts";
+import { renderWebsearch } from "./render-websearch.js";
 
 // Top-level await; any throw exits non-zero with a stack trace via tsx.
 const rendered = await renderWebsearch();

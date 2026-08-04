@@ -5,6 +5,10 @@
 // reach content past MAX_CHARS_HARD_CAP — see issue #132. Sequential chunks
 // tile exactly, so a caller that strips the footers can concatenate them
 // losslessly.
+//
+// The footer and the past-end marker below are two of the three in-band
+// markers that make up the model contract. See
+// [ADR 0002](../../docs/adr/0002-in-band-markers.md).
 
 // Slice the extracted markdown for the LLM. Pagination via `offset` is the
 // only way to reach content past MAX_CHARS_HARD_CAP — see issue #132. The

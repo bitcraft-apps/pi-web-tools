@@ -33,3 +33,5 @@ plan. A topic doc at `docs/<topic>.md` tells a user how a feature behaves.
 
 - [`0001-webfetch-pagination-memo.md`](0001-webfetch-pagination-memo.md) —
   accept a bounded single-entry memo for `webfetch` pagination.
+- [`0002-in-band-markers.md`](0002-in-band-markers.md) — signal the model with
+  markers inside the returned text, not with structured fields.

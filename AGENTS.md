@@ -46,10 +46,22 @@ A subject like `security(webfetch): ...` looks conventional but `security` isn't
 - `ci(deps): bump googleapis/release-please-action from 4.4.1 to 5.0.0`
 - `docs(agents): require one-issue-one-PR and document granulation`
 
+## Design rationale
+
+This file holds policy: how to work in the repo, and what not to propose. The
+reasons behind the design live in [`docs/adr/`](docs/adr/README.md) — one record
+per decision, with the options that were rejected and the consequences.
+
+Read the records before you propose a change to fetching, the SSRF guard, the
+markers in returned text, the HTML converters, or the extraction pre-pass. Each
+one names the file that implements it. The scope rules below, and the
+deferred-tool-loading analysis further down, keep their decisions here; they get
+no record of their own.
+
 ## Out of scope (deliberately rejected, do not propose)
 
 - **Build step.** Pi loads raw `.ts` via jiti — no Webpack, Rollup, tsc emit, etc.
-- **HTML→markdown npm libraries** (Turndown, etc.). Pandoc/w3m via subprocess is the design.
+- **HTML→markdown npm libraries** (Turndown, etc.). Pandoc/w3m via subprocess is the design. See [ADR 0005](docs/adr/0005-subprocess-html-to-markdown.md).
 - **API-key / account-based search providers** (Tavily, Brave, Exa, Perplexity, Anthropic web_search, Ollama Web Search). Zero-key is the project's reason to exist.
 - **Headless browsers, JS execution** (Playwright, Puppeteer, etc.). Shell-only constraint.
 

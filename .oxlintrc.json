@@ -20,7 +20,7 @@
     // allow-list here would silently fail-lint future reset hooks.
     "eslint/no-underscore-dangle": "off",
     // Relative imports must carry a `.js` extension, never `.ts`. There is no build
-    // step, so the written extension is the resolution contract — jiti, vitest, tsgo
+    // step, so the written extension is the resolution contract — jiti, vitest, tsc
     // and tsx all map `./x.js` onto `x.ts`, and `.js` is what a compiled consumer
     // would need. See #212.
     // Use the `"ignorePackages"` mode string, not `"always"` with

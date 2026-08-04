@@ -31,13 +31,19 @@ jobs:
 
       # Type-check before tests: type errors are a cheaper signal than
       # a full vitest run, and vitest (esbuild) strips types without
-      # checking them. tsgo is @typescript/native-preview, pinned exact
-      # in package.json (preview channel — no semver, daily dev builds).
-      # Bump cadence: refresh roughly weekly; track issue #50.
-      # Escape hatch if tsgo regresses on a real diagnostic: temporarily
-      # swap this step for `bunx -p typescript tsc --noEmit -p tsconfig.json`
-      # (and add `typescript` back to devDependencies) until the next
-      # @typescript/native-preview release lands.
+      # checking them. This step runs `tsc` from the released `typescript`
+      # package (7.x, the native compiler). It replaced tsgo
+      # (@typescript/native-preview) in #222: that preview channel stopped
+      # publishing on 2026-07-07, when the native port shipped as
+      # TypeScript 7.0. There is no cadence to track any more — the old
+      # "refresh roughly weekly" rule existed only for daily dev builds.
+      # `typescript` is pinned exact in package.json. A TypeScript minor
+      # can add diagnostics whatever its version number says, so each
+      # release must arrive as its own PR. Dependabot proposes it; merge
+      # when CI is green.
+      # Escape hatch if a release regresses on a real diagnostic: pin the
+      # previous 7.0.x patch, or fall back to `typescript@6.0.3` — the last
+      # release with the JavaScript `tsc`.
       - run: bun run typecheck
 
       # Format gate. oxfmt is pre-1.0 (preview channel) — output is NOT

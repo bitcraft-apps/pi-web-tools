@@ -1,5 +1,12 @@
 name: release-please
 
+# When a run here fails, read docs/release-runbook.md first. It maps the failed
+# stage to the commands that diagnose it, and records the four past failures
+# (#28, #32, #42, #76) that the comments below exist to prevent.
+#
+# The npm trusted publisher is bound to this exact filename. Renaming this file
+# breaks publishing until the registration on npm is updated.
+
 on:
   push:
     branches: [main]
@@ -23,15 +30,15 @@ jobs:
       # so release PRs/commits aren't authored by GITHUB_TOKEN. GitHub deliberately
       # suppresses workflow runs for events produced by a workflow's own GITHUB_TOKEN
       # (recursion guard, see issue #28). App-authored events bypass that guard, so
-      # the `vitest (bun)` check on `pull_request` actually runs on release PRs.
-      # SHA-pinned to v3.1.1 per the existing third-party-action hardening posture.
+      # the `ci-gate` check on `pull_request` actually runs on release PRs.
+      # SHA-pinned per the existing third-party-action hardening posture.
       - id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.RELEASE_BOT_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
 
-      # Pinned to v4 tag commit (5c625bf) per GitHub hardening guidance for third-party actions.
+      # SHA-pinned per GitHub hardening guidance for third-party actions.
       - id: rp
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:

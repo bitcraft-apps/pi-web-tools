@@ -10,10 +10,11 @@ Do not open public issues for suspected vulnerabilities.
 
 Dependabot alerts are enabled for this repository.
 
-Dependabot *security* updates are not available. This repository uses the `bun`
-ecosystem, because the committed lockfile is `bun.lock`. GitHub lists security
-updates as unsupported for that ecosystem. There are no out-of-band security
-pull requests.
+Dependabot *security* updates are enabled in the repository settings, but they
+do not apply. This repository uses the `bun` ecosystem, because the committed
+lockfile is `bun.lock`. GitHub lists security updates as unsupported for that
+ecosystem. The setting stays on, and it has no effect here. There are no
+out-of-band security pull requests.
 
 The compensating control is the weekly Dependabot version sweep. It picks up
 patched releases like any other release. The worst-case delay between a patched

@@ -111,6 +111,40 @@ export class ShellModeError extends Error {
   }
 }
 
+/**
+ * Continuation memo for paginated reads. See
+ * [ADR 0001](../../docs/adr/0001-webfetch-pagination-memo.md) and issue #259.
+ *
+ * The entry holds the exact string that the last successful `offset === 0` call
+ * passed to `paginate`. A call with `offset > 0` for the same URL paginates that
+ * string and makes no network request, which turns a paginated read from
+ * quadratic to linear. The largest gain is the PDF path, which re-ran
+ * `pdftotext` on the whole file for every chunk.
+ *
+ * Properties, all of them load-bearing:
+ *
+ * - **Key: the validated input URL.** The lookup runs before any request, so the
+ *   final URL after redirects is not yet known.
+ * - **Value: the exact string that reached `paginate`.** The string includes the
+ *   cross-host redirect notice. The agent measured its offsets against that same
+ *   string, so a value without the notice would shift every offset.
+ * - **One entry.** A successful `offset === 0` call for a different URL replaces
+ *   it.
+ * - **Write on success only.** A call that throws leaves the entry in place.
+ * - No validator, no expiry time, and no persistence. The ADR rejects all three.
+ *
+ * A stale value is acceptable. A call with `offset === 0` always reaches the
+ * network, so no first read comes from memory. A continuation read wants the
+ * rest of the document that it already started to read, so the stored snapshot
+ * is the correct answer even when the source changed.
+ */
+let continuationMemo: { key: string; text: string } | null = null;
+
+/** Test-only: drop the continuation memo entry. */
+export function __resetFetchMemoForTesting(): void {
+  continuationMemo = null;
+}
+
 export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
   const url = validateUrl(input.url);
   // The floor of 2 is stated twice: `minimum: 2` on webfetch's `max_chars`
@@ -148,6 +182,23 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
       `offset ${offset} exceeds the maximum addressable range (${MAX_RESPONSE_BYTES} = MAX_RESPONSE_BYTES); documents that large are not supported`,
     );
   }
+
+  // Continuation memo (issue #259). Read it only for `offset > 0`, and only
+  // before the first request — see the JSDoc on `continuationMemo`. A miss
+  // falls through to a full fetch, which is what keeps the mid-pagination
+  // guards reachable: the past-end marker in `paginate`, and the
+  // `offset === 0` clause in the JSON fence gate below.
+  const memoKey = url.toString();
+  if (offset > 0 && continuationMemo?.key === memoKey) {
+    return paginate(continuationMemo.text, offset, maxChars);
+  }
+  // Single exit point for every branch that paginates. The memo must hold the
+  // exact string that `paginate` received, and only on success; one helper
+  // makes both true by construction. A branch that throws never gets here.
+  const finish = (text: string): string => {
+    if (offset === 0) continuationMemo = { key: memoKey, text };
+    return paginate(text, offset, maxChars);
+  };
 
   // If the first attempt throws (e.g. SSRF guard tripped on a redirect),
   // we deliberately do NOT fall through to the CF UA-swap retry — blocked
@@ -257,7 +308,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
       // so hardcode it here rather than re-parsing contentType.
       throw new Error(`Cannot fetch application/pdf. Use a tool that supports binary content.`);
     }
-    return paginate(notice + text, offset, maxChars);
+    return finish(notice + text);
   }
 
   const body = await decodeBody(response, kind);
@@ -273,17 +324,22 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
       // raw pretty-printed body keeps every chunk self-consistent at the
       // cost of losing the language hint on large JSON responses.
       //
-      // The gate is per-call, not stable across paginated calls of the
-      // same URL: there is no cache, so a body that changed size between
-      // calls could wrap at one offset and unwrap at another (in either
-      // direction — grew → wrap-then-unwrap, shrank → unwrap-then-wrap).
-      // The grow case is benign: the wrapped branch fits in a single
-      // chunk and emits no footer, so the agent never re-calls. The
-      // shrink case (unwrap at N=0 → wrap at N>0) lands the re-call past
-      // the end of the now-smaller wrapped body, which the past-end
-      // marker in `paginate` reports honestly — that recovery path is
-      // the intended fallback here, same as for any other mid-pagination
-      // mutation.
+      // The gate is per-call. A continuation that hits the memo never
+      // reaches this code: it replays the exact string that the gate
+      // already chose, so the fence decision is stable for a hit.
+      //
+      // A memo miss at offset>0 still runs the gate again (issue #259
+      // keeps one entry only, so an interleaved fetch of a second URL
+      // produces exactly that case). A body that changed size between
+      // calls can then wrap at one offset and unwrap at another (in
+      // either direction — grew → wrap-then-unwrap, shrank →
+      // unwrap-then-wrap). The grow case is benign: the wrapped branch
+      // fits in a single chunk and emits no footer, so the agent never
+      // re-calls. The shrink case (unwrap at N=0 → wrap at N>0) lands
+      // the re-call past the end of the now-smaller wrapped body, which
+      // the past-end marker in `paginate` reports honestly — that
+      // recovery path is the intended fallback here, same as for any
+      // other mid-pagination mutation.
       //
       // Belt-and-braces: also gate on `offset === 0`. Without it, an
       // agent that re-calls with offset>0 against a wrapped body that
@@ -300,16 +356,16 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
       // cross-host redirect to a JSON body just under the cap would then
       // wrap, and the notice would push the first chunk over.
       if (offset === 0 && (notice + wrapped).length <= maxChars) {
-        return paginate(notice + wrapped, offset, maxChars);
+        return finish(notice + wrapped);
       }
-      return paginate(notice + pretty, offset, maxChars);
+      return finish(notice + pretty);
     } catch {
-      return paginate(notice + body, offset, maxChars);
+      return finish(notice + body);
     }
   }
 
   if (kind === "text") {
-    return paginate(notice + body, offset, maxChars);
+    return finish(notice + body);
   }
 
   // html
@@ -369,7 +425,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     // same-origin-checked against the page we actually fetched, not the
     // pre-redirect input.
     const alt = await tryFollowAlternate(body, finalUrl, currentUa);
-    if (alt !== null) return paginate(notice + alt, offset, maxChars);
+    if (alt !== null) return finish(notice + alt);
   }
 
   const md = await htmlToMarkdown(useExtracted ? extracted : body);
@@ -407,7 +463,7 @@ export async function fetchAsMarkdown(input: FetchInput): Promise<string> {
     throw new ShellModeError("js_shell");
   }
 
-  return paginate(notice + md, offset, maxChars);
+  return finish(notice + md);
 }
 
 // Try to follow the first allowlisted, same-origin <link rel="alternate">

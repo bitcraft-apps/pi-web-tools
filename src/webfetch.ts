@@ -52,7 +52,7 @@ const webfetchSchema = Type.Object(
         Type.Null(),
       ],
       {
-        description: `Character offset into the extracted markdown; pass null or 0 to start at the beginning. When the previous fetch returned a \`[TRUNCATED ... Re-call with offset=N ...]\` footer, pass that N here to read the next chunk. There is no cache between calls — each paginated read re-fetches and re-extracts.`,
+        description: `Character offset into the extracted markdown; pass null or 0 to start at the beginning. When the previous fetch returned a \`[TRUNCATED ... Re-call with offset=N ...]\` footer, pass that N here to read the next chunk. The tool keeps the last fetched document in memory, so a chunk after the first usually needs no new request.`,
       },
     ),
   },
@@ -281,7 +281,7 @@ export const webfetchTool = defineTool<typeof webfetchSchema, WebfetchToolDetail
   // in the description: pagination is supported, it is just the expensive way
   // to read a document.
   promptGuidelines: [
-    "`webfetch` has no cache: every paginated call re-fetches and re-extracts the whole document, and PDFs re-run pdftotext each time. Prefer a single call with a large `max_chars` over several `offset` reads.",
+    "`webfetch` keeps only the last fetched document in memory: a call with `offset` greater than 0 for that same URL costs no request, but a call with `offset` 0 always re-fetches and re-extracts, and PDFs re-run pdftotext. Prefer a single call with a large `max_chars` over several `offset` reads.",
     "Use `webfetch` after `websearch` to read a promising result in full, or directly when the user supplies a URL.",
   ],
   // Ask the provider to constrain sampling to the parameter schema where it

@@ -22,7 +22,12 @@ vi.mock("../src/lib/pdf.js", () => ({
   pdfToText: vi.fn(async () => null),
 }));
 
-import { fetchAsMarkdown, looksLikeJsShell, ShellModeError } from "../src/lib/pipeline.js";
+import {
+  fetchAsMarkdown,
+  looksLikeJsShell,
+  ShellModeError,
+  __resetFetchMemoForTesting,
+} from "../src/lib/pipeline.js";
 import { RETRY_AFTER_MAX_MS } from "../src/lib/http.js";
 import { stripPaginationFooter } from "../src/lib/paginate.js";
 import { htmlToMarkdown } from "../src/lib/html2md.js";
@@ -31,6 +36,11 @@ import { pdfToText } from "../src/lib/pdf.js";
 import { ACCEPT_HEADER, MAX_RESPONSE_BYTES } from "../src/lib/headers.js";
 
 beforeEach(() => {
+  // The continuation memo lives for the whole process (issue #259). Without
+  // this reset it leaks between tests: a test that reads `https://example.com`
+  // at offset 0 would let a later test's offset>0 call on the same URL come
+  // from memory instead of from its own mock.
+  __resetFetchMemoForTesting();
   vi.clearAllMocks();
   // clearAllMocks doesn't drain mockResolvedValueOnce queues. Reset and
   // re-establish the default null so leftover queued values from one test
@@ -98,6 +108,14 @@ describe("fetchAsMarkdown", () => {
     // we kept the JSON.parse → JSON.stringify path and only dropped fences.
     expect(md).toMatch(/\n {4}"i": 0/);
     expect(md).toMatch(/TRUNCATED/);
+
+    // Evict the continuation memo (issue #259) with an offset=0 read of a
+    // second URL. The memo holds one entry, so the next call re-fetches and
+    // runs the JSON branch again — which is what keeps the `offset === 0`
+    // clause of the fence gate under test. A memo hit would replay the
+    // string chunk[0] already produced and never reach the gate.
+    mockFetchOnce({ body: "other", headers: { "content-type": "text/plain" } });
+    await fetchAsMarkdown({ url: "https://example.com/other.txt" });
 
     // Continuation must also be raw (no stray opening fence on chunk[1+],
     // no orphan closing ``` either) — the corruption claim in the
@@ -350,7 +368,10 @@ describe("fetchAsMarkdown", () => {
   it("paginates content larger than max_chars across sequential calls (issue #132)", async () => {
     // Use the text/plain branch (verbatim body — same paginate() call site)
     // so the test isn't constrained by the htmlToMarkdown mock's 20-char cap.
-    // No cache between calls (issue #132) — each fetch is mocked independently.
+    // chunk0 (offset=0) fetches; chunk1 and chunk2 come from the continuation
+    // memo (issue #259). Their mocks are therefore unused, and the bodies are
+    // identical anyway — the assertion is on tiling, not on the request count.
+    // The dedicated no-request test below pins the memo behaviour itself.
     const big = "y".repeat(450_000);
     mockFetchOnce({ body: big, headers: { "content-type": "text/plain" } });
     const part1 = await fetchAsMarkdown({ url: "https://example.com/big.txt" });
@@ -391,12 +412,14 @@ describe("fetchAsMarkdown", () => {
   });
 
   it("reconstructed output desyncs when upstream changes mid-pagination (issue #132)", async () => {
-    // Proves the README's "no cache — each paginated call re-fetches"
-    // warning is real, not speculative: if the upstream body changes
-    // between calls (page edited, dynamic content, A/B variant), the
-    // chunks no longer come from a single document and reconstruction is
-    // garbage — even though every individual call succeeds and the
-    // footer arithmetic stays internally consistent per chunk.
+    // Proves the README's warning about a memo miss is real, not
+    // speculative: the continuation memo holds one entry, so an interleaved
+    // fetch of a second URL sends the next continuation back to the network
+    // (issue #259). If the upstream body changed in the meantime (page
+    // edited, dynamic content, A/B variant), the chunks no longer come from
+    // a single document and reconstruction is garbage — even though every
+    // individual call succeeds and the footer arithmetic stays internally
+    // consistent per chunk.
     const bodyA = "a".repeat(450_000);
     const bodyB = "b".repeat(450_000); // same length, different content
 
@@ -406,6 +429,10 @@ describe("fetchAsMarkdown", () => {
       max_chars: 200_000,
       offset: 0,
     });
+    // Evict the memo entry: one entry only, so this replaces it.
+    mockFetchOnce({ body: "unrelated", headers: { "content-type": "text/plain" } });
+    await fetchAsMarkdown({ url: "https://example.com/unrelated.txt" });
+
     mockFetchOnce({ body: bodyB, headers: { "content-type": "text/plain" } });
     const chunk1 = await fetchAsMarkdown({
       url: "https://example.com/mutating.txt",
@@ -458,6 +485,11 @@ describe("fetchAsMarkdown", () => {
       max_chars: 200_000,
       offset: 0,
     });
+    // Evict the memo entry so the continuation reaches the network, the
+    // same as the equal-length test above (issue #259).
+    mockFetchOnce({ body: "unrelated", headers: { "content-type": "text/plain" } });
+    await fetchAsMarkdown({ url: "https://example.com/unrelated.txt" });
+
     // chunk0's footer says "total=450_000, next offset=200_000". An
     // honest re-call threads that 200_000 forward; the now-shorter bodyB
     // happily serves a chunk starting at offset=200_000 (within its
@@ -494,6 +526,106 @@ describe("fetchAsMarkdown", () => {
     // indices 200_000…299_999); 300_000 itself would be undefined.
     expect(reconstructed[100_000]).toBe("a");
     expect(reconstructed[250_000]).toBe("b");
+  });
+
+  // Continuation memo — issue #259, ADR 0001.
+
+  it("serves a continuation read from the memo without a request (issue #259)", async () => {
+    const big = "y".repeat(450_000);
+    const fetchMock = mockFetchOnce({ body: big, headers: { "content-type": "text/plain" } });
+    const chunk0 = await fetchAsMarkdown({
+      url: "https://example.com/memo.txt",
+      max_chars: 200_000,
+      offset: 0,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // No new mock: the one above is one-shot, so a second request would
+    // resolve undefined and throw. Reaching a valid chunk proves the memo
+    // answered.
+    const chunk1 = await fetchAsMarkdown({
+      url: "https://example.com/memo.txt",
+      max_chars: 200_000,
+      offset: 200_000,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The memo keeps the tiling exact, not just the request count.
+    expect(chunk1).toMatch(/offset=400000/);
+    expect(stripPaginationFooter(chunk0) + stripPaginationFooter(chunk1)).toBe(
+      big.slice(0, 400_000),
+    );
+  });
+
+  it("always fetches at offset 0, even with a stored entry for the same URL (issue #259)", async () => {
+    const first = mockFetchOnce({ body: "first body", headers: { "content-type": "text/plain" } });
+    expect(await fetchAsMarkdown({ url: "https://example.com/fresh.txt" })).toBe("first body");
+    expect(first).toHaveBeenCalledTimes(1);
+
+    // The freshness promise: a first read never comes from memory, so the
+    // changed body must win over the stored one.
+    const second = mockFetchOnce({
+      body: "second body",
+      headers: { "content-type": "text/plain" },
+    });
+    expect(await fetchAsMarkdown({ url: "https://example.com/fresh.txt", offset: 0 })).toBe(
+      "second body",
+    );
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces the entry on an interleaved fetch of a second URL (issue #259)", async () => {
+    const big = "z".repeat(450_000);
+    mockFetchOnce({ body: big, headers: { "content-type": "text/plain" } });
+    const chunk0 = await fetchAsMarkdown({
+      url: "https://example.com/one.txt",
+      max_chars: 200_000,
+      offset: 0,
+    });
+
+    // One entry only: this offset=0 read evicts the entry for one.txt.
+    mockFetchOnce({ body: "other", headers: { "content-type": "text/plain" } });
+    expect(await fetchAsMarkdown({ url: "https://example.com/two.txt" })).toBe("other");
+
+    // The continuation therefore misses and re-fetches. Same body upstream,
+    // so the chunks still tile exactly.
+    const refetch = mockFetchOnce({ body: big, headers: { "content-type": "text/plain" } });
+    const chunk1 = await fetchAsMarkdown({
+      url: "https://example.com/one.txt",
+      max_chars: 200_000,
+      offset: 200_000,
+    });
+    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(stripPaginationFooter(chunk0) + stripPaginationFooter(chunk1)).toBe(
+      big.slice(0, 400_000),
+    );
+  });
+
+  it("does not re-spawn pdftotext for a PDF continuation (issue #259)", async () => {
+    // The worst case the memo exists for: pdftotext ran on the whole file
+    // for every chunk before #259.
+    const text = "p".repeat(450_000);
+    vi.mocked(pdfToText).mockResolvedValue(text);
+    mockFetchOnce({
+      body: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+      headers: { "content-type": "application/pdf" },
+    });
+    const chunk0 = await fetchAsMarkdown({
+      url: "https://example.com/doc.pdf",
+      max_chars: 200_000,
+      offset: 0,
+    });
+    expect(pdfToText).toHaveBeenCalledTimes(1);
+
+    const chunk1 = await fetchAsMarkdown({
+      url: "https://example.com/doc.pdf",
+      max_chars: 200_000,
+      offset: 200_000,
+    });
+    expect(pdfToText).toHaveBeenCalledTimes(1);
+    expect(stripPaginationFooter(chunk0) + stripPaginationFooter(chunk1)).toBe(
+      text.slice(0, 400_000),
+    );
   });
 
   it("rejects response > 5MB via content-length", async () => {

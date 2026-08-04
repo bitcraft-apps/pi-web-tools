@@ -39,3 +39,5 @@ plan. A topic doc at `docs/<topic>.md` tells a user how a feature behaves.
   undici's `fetch`, not Node's global one, so the SSRF dispatcher is honored.
 - [`0004-two-layer-ssrf-guard.md`](0004-two-layer-ssrf-guard.md) — guard SSRF in
   two layers: a string-level parse before the request and a connect-time DNS pin.
+- [`0005-subprocess-html-to-markdown.md`](0005-subprocess-html-to-markdown.md) —
+  convert HTML with a `pandoc` or `w3m` subprocess, not an in-process npm library.

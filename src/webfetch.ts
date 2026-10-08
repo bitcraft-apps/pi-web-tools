@@ -141,6 +141,18 @@ function countLines(body: string): number {
 }
 
 /**
+ * Slice a preview line to `WEBFETCH_PREVIEW_MAX_LINE_CHARS` with an
+ * ellipsis. Module scope: pure, captures nothing — recreating it per
+ * render would be waste. The model still received the full content;
+ * the cap only bounds this view.
+ */
+function capLine(line: string): string {
+  return line.length > WEBFETCH_PREVIEW_MAX_LINE_CHARS
+    ? line.slice(0, WEBFETCH_PREVIEW_MAX_LINE_CHARS) + "…"
+    : line;
+}
+
+/**
  * Pure formatter for the webfetch tool call header.
  *
  * `max_chars` is shown muted only when the user (LLM) overrode the
@@ -239,17 +251,6 @@ export function formatWebfetchResult(
 
   if (lineCount === 0) return header;
 
-  // Per-line cap: WEBFETCH_PREVIEW_MAX_LINES bounds vertical scrollback,
-  // but a 200-line page where each line is 50KB (minified JSON, single-
-  // line HTML that slipped past extraction) still floods the terminal
-  // horizontally. 500 chars is plenty to skim a wrapped paragraph or a
-  // shell-friendly JSON line; longer lines get an ellipsis so the user
-  // knows content was elided for *this view*. Full content still went to
-  // the model — see footer.
-  const capLine = (line: string): string =>
-    line.length > WEBFETCH_PREVIEW_MAX_LINE_CHARS
-      ? line.slice(0, WEBFETCH_PREVIEW_MAX_LINE_CHARS) + "…"
-      : line;
   const rawLines = body.split("\n");
   const lines = rawLines.map(capLine);
   if (lines.length <= WEBFETCH_PREVIEW_MAX_LINES) {

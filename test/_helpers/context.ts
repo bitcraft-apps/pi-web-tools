@@ -16,7 +16,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 export function stubExtensionContext(): ExtensionContext {
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- intentional: see file header. Centralized stub for tools whose execute() never reads ctx.
   const stub = new Proxy(
     {},
     {
@@ -34,6 +33,7 @@ export function stubExtensionContext(): ExtensionContext {
         );
       },
     },
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- intentional: see file header. Centralized stub for tools whose execute() never reads ctx.
   ) as unknown as ExtensionContext;
   return stub;
 }

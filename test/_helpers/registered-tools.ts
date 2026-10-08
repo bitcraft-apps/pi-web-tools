@@ -19,11 +19,11 @@ export interface SchemaShapedTool {
 /** Every tool `index.ts` registers, in source order. */
 export function registeredTools(): SchemaShapedTool[] {
   const tools: SchemaShapedTool[] = [];
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- intentional: the extension entrypoint only calls registerTool, so a faithful ExtensionAPI would be a pile of unused fakes (same rationale as _helpers/context.ts).
   const pi = {
     registerTool: (tool: SchemaShapedTool) => {
       tools.push(tool);
     },
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- intentional: the extension entrypoint only calls registerTool, so a faithful ExtensionAPI would be a pile of unused fakes (same rationale as _helpers/context.ts).
   } as unknown as ExtensionAPI;
   registerExtension(pi);
   return tools;

@@ -33,7 +33,7 @@ jobs:
       # the `ci-gate` check on `pull_request` actually runs on release PRs.
       # SHA-pinned per the existing third-party-action hardening posture.
       - id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ secrets.RELEASE_BOT_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
@@ -62,7 +62,7 @@ jobs:
 
       # Node 22.x ships with npm >= 10.9.x. We swap it for 11.5.1 via corepack
       # below — see the long comment on the install step for why.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22.x'
           registry-url: 'https://registry.npmjs.org'
